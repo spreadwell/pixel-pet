@@ -15,7 +15,7 @@ export interface PetOptions extends BrainOptions {
   px: number;
   /** Any CSS colour expression, e.g. 'var(--interactive-accent)'. */
   color: string;
-  /** How much finer than art px the gecko is drawn (1.5 = half as many pixels again each way). */
+  /** How much finer than art px the gecko is drawn (1 = one canvas pixel per art px; 1.5 is finer). */
   detail?: number;
   /** Frame-rate cap (0 = display rate). */
   maxFps?: number;
@@ -198,7 +198,7 @@ export class PetEngine {
   private resize() {
     const px = this.opts.px, dpr = this.win.devicePixelRatio || 1;
     // Each canvas pixel is a whole number of device pixels, so the art stays crisp.
-    const cpx = Math.max(1, Math.round((px / (this.opts.detail ?? 1.5)) * dpr)) / dpr;
+    const cpx = Math.max(1, Math.round((px / (this.opts.detail ?? 1)) * dpr)) / dpr;
     this.res = px / cpx;
     const w = Math.ceil(this.win.innerWidth / cpx), h = Math.ceil(this.win.innerHeight / cpx);
     this.canvas.width = w;

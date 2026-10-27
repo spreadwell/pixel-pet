@@ -205,7 +205,7 @@ export class Body {
   /** Crawling under a panel rather than over the terrain. */
   under = false;
   /** How much the body sways side to side as it walks (trunk flex, path snaking, tail wave). */
-  sway = 1;
+  sway = 0.55;
   /** Walk in lateral sequence at low speed, blending into the trot. Off: always trot. */
   natural = false;
   /** 0 walking → 1 trotting. */
