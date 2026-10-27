@@ -50,14 +50,12 @@ const HEIGHT_SELECTORS: [string, number][] = [
   ['.workspace-tab-header', 10],
 ];
 /**
- * Each line of text is its own ridge, as tall as the letters stand and trimmed to the
- * band where they sit, so a paragraph is a run of ridges to clamber over rather than
- * one slab. Headings stand a little taller.
+ * Each paragraph (a block of lines with no blank line between them) is a mesa standing
+ * on the note: one flat top to climb up onto and walk across, with the gaps between
+ * paragraphs as the valleys. A heading stands a little taller.
  */
 const TEXT_Z = 4;
 const HEADING_Z = 5;
-const LINE_TRIM_TOP = 0.22;
-const LINE_TRIM_BOTTOM = 0.18;
 /** Where the words are: the editor and reading view. */
 const TEXT_ROOTS = '.cm-content, .markdown-preview-view';
 /** Bounds on the text scan, which runs twice a second. */
@@ -158,8 +156,8 @@ export class World {
       });
     }
     this.covers = covers;
-    const lines = this.scanText();
-    this.buildHeights(lines);
+    const mesas = this.scanText();
+    this.buildHeights(mesas);
 
     this.detectShifts(sig);
     this.buildEdges();
@@ -210,7 +208,7 @@ export class World {
     this.prevSignature = sig;
   }
 
-  /** Merge the line boxes of visible text into paragraph-sized blocks. Returns the lines, in art px. */
+  /** Merge the line boxes of visible text into paragraph-sized blocks. Returns the blocks with their heights, in art px. */
   private scanText(): (Rect & { z: number })[] {
     const doc = this.win.document, vh = this.win.innerHeight;
     const roots = Array.from(doc.querySelectorAll<HTMLElement>(TEXT_ROOTS)).filter((r) => !r.parentElement?.closest(TEXT_ROOTS));
@@ -240,17 +238,17 @@ export class World {
       b.x = Math.min(b.x, r.x); b.y = Math.min(b.y, r.y); b.w = x2 - b.x; b.h = y2 - b.y;
     }
     this.text = blocks.map((b) => this.toArt(b)).filter((b) => !this.coverAt(b.x + b.w / 2, b.y + b.h / 2));
-    // Lines much taller than most are headings.
+    // A block whose lines are much taller than most is a heading.
     const sorted = lines.map((l) => l.h).sort((a, b) => a - b);
     const typical = sorted[Math.floor(sorted.length / 2)] ?? 0;
-    return lines.map((l) => {
-      const a = this.toArt(l);
-      return { x: a.x, y: a.y + a.h * LINE_TRIM_TOP, w: a.w, h: a.h * (1 - LINE_TRIM_TOP - LINE_TRIM_BOTTOM), z: l.h > typical * 1.3 ? HEADING_Z : TEXT_Z };
+    return blocks.map((b) => {
+      const tall = lines.some((l) => l.h > typical * 1.3 && l.y >= b.y - 1 && l.y + l.h <= b.y + b.h + 1 && l.x < b.x + b.w && l.x + l.w > b.x);
+      return { ...this.toArt(b), z: tall ? HEADING_Z : TEXT_Z };
     });
   }
 
-  /** Rasterise the terrain: interface parts by selector, then the lines of text. */
-  private buildHeights(lines: (Rect & { z: number })[]) {
+  /** Rasterise the terrain: interface parts by selector, then the paragraph mesas. */
+  private buildHeights(mesas: (Rect & { z: number })[]) {
     const doc = this.win.document;
     const w = Math.ceil(this.win.innerWidth / this.px), h = Math.ceil(this.win.innerHeight / this.px);
     if (w * h !== this.heights.length) this.heights = new Uint8Array(w * h);
@@ -271,9 +269,9 @@ export class World {
         if (sel === '.workspace-tab-header' && a.w > 12) perches.push(a);
       });
     }
-    for (const l of lines) {
-      fill(l, l.z);
-      if (l.z === HEADING_Z && l.w > 12) perches.push(l);
+    for (const m of mesas) {
+      fill(m, m.z);
+      if (m.z === HEADING_Z && m.w > 12) perches.push(m);
     }
     this.perches = perches;
   }

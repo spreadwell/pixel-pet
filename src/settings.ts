@@ -70,8 +70,8 @@ export class PixelPetSettingTab extends PluginSettingTab {
     new Setting(containerEl).setName('Behavior').setHeading();
 
     new Setting(containerEl)
-      .setName('Nibble letters')
-      .setDesc('Now and then it eats a letter off the screen. Only the display is affected — your note is never changed — and the letter grows back.')
+      .setName('Steal letters')
+      .setDesc('Now and then it plucks a letter out of a word and carries it off to eat. Only the display is affected — your note is never changed — and the letter grows back.')
       .addToggle((t) => t.setValue(s.nibbleLetters).onChange(async (v) => { s.nibbleLetters = v; await save(); }));
 
     new Setting(containerEl)

@@ -4,6 +4,7 @@ import type { InputTracker } from './input';
 import { angleDiff, clamp, lerp, rand } from './math';
 import type { NibbleTarget, Nibbler } from './nibble';
 import type { Palette } from './palette';
+import type { Reactions } from './reactions';
 import { Waypoint, findRoute } from './route';
 import type { CoverEntry, World } from './world';
 
@@ -23,8 +24,8 @@ import type { CoverEntry, World } from './world';
 //   - Walls are the workspace's panel seams and the window; home is a panel corner.
 //   - Prey is only struck when it is on the ground; flying insects are watched.
 //   - The stats readout is gone. Hunger and sleepiness only show through behaviour.
-//   - New: scare() for pokes, panels and typing; petting; nibbling a letter; and a nap
-//     when the user is away.
+//   - New: scare() for pokes, panels and typing; petting; stealing a letter out of a
+//     word to carry off and eat; and a nap when the user is away.
 //   - New: the workspace is terrain. It climbs onto the sidebars and tabs and over
 //     your text, and squeezes along the gaps between paragraphs (the Body does the
 //     climbing). Side panels are also cover: it slips under one, waits and peeks back
@@ -38,6 +39,8 @@ import type { CoverEntry, World } from './world';
 // are in 60 Hz ticks, exactly as in the original.
 
 const S = 0.55;
+/** Hiding under the side panels is switched off for now; the code stays for later. */
+const HIDING = false;
 const dist = (x1: number, y1: number, x2: number, y2: number) => Math.hypot(x2 - x1, y2 - y1);
 const lerpAngle = (a: number, b: number, t: number) => a + angleDiff(a, b) * t;
 
@@ -54,6 +57,7 @@ export interface Ctx {
   input: InputTracker;
   swarm: Swarm;
   nibbler: Nibbler;
+  reactions: Reactions;
   particles: Particles;
   pal: Palette;
   opts: BrainOptions;
@@ -395,7 +399,7 @@ const StateHandlers: Record<State, Handler> = {
     },
     update(g) {
       // Bolt for the nearest panel leading away from the threat, if there is one.
-      if (g.stateTimer === 1 && g.findCover(110, { x: g.threatX, y: g.threatY })) { g.hideFast = true; return { targetSpeed: g.speed, transition: STATE.HIDE }; }
+      if (HIDING && g.stateTimer === 1 && g.findCover(110, { x: g.threatX, y: g.threatY })) { g.hideFast = true; return { targetSpeed: g.speed, transition: STATE.HIDE }; }
       const mult = g.mildScare || g.c.opts.reducedMotion ? 1.2 : g.traits.resolve('fleeMultiplier');
       const targetSpeed = g.speed * mult;
       g.targetAngle += Math.sin(g.burstTimer * 0.3) * 0.15;
@@ -443,11 +447,12 @@ const StateHandlers: Record<State, Handler> = {
     },
     update(g) {
       const sd = g.stateData, head = g.head;
+      sd.timer++;
+      if (sd.phase === 'grab' || sd.phase === 'carry' || sd.phase === 'eat') return stealing(g);
       const at = g.letterAt;
       if (!at || (g.typing && sd.phase === 'approach')) { g.dropLetter(); return { targetSpeed: 0.05 * S, transition: STATE.IDLE }; }
       const d = dist(head.x, head.y, at.x, at.y);
       const toLetter = Math.atan2(at.y - head.y, at.x - head.x);
-      sd.timer++;
       if (sd.phase === 'approach') {
         const wp = g.waypoint(at.x, at.y);
         g.targetAngle = d < 20 * S ? toLetter : Math.atan2(wp.y - head.y, wp.x - head.x);
@@ -459,16 +464,12 @@ const StateHandlers: Record<State, Handler> = {
         return { targetSpeed };
       }
       g.headLook.lookAt(angleDiff(g.angle, toLetter));
-      if (sd.phase === 'taste') {
-        // Taste it first, a couple of times.
-        if (sd.timer % 30 === 5 && sd.flicks < 2) { g.flick(); sd.flicks++; }
-        if (sd.timer > 75) { sd.phase = 'bite'; sd.timer = 0; g.body.mouthTarget = 1; g.biteLetter(); }
-        return { targetSpeed: 0 };
+      // Taste it first, a couple of times, then snatch it out of the word.
+      if (sd.timer % 30 === 5 && sd.flicks < 2) { g.flick(); sd.flicks++; }
+      if (sd.timer > 75) {
+        if (!g.stealLetter()) return { targetSpeed: 0, transition: STATE.IDLE };
+        sd.phase = 'grab'; sd.timer = 0;
       }
-      // Chew, head working side to side.
-      g.body.mouthTarget = Math.floor(sd.timer / 6) % 2 === 0 ? 0.5 : 0;
-      g.headLook.lookAt(angleDiff(g.angle, toLetter) + Math.sin(sd.timer * 0.9) * 0.25);
-      if (sd.timer > 70) { g.body.mouthTarget = 0; return { targetSpeed: 0, transition: STATE.IDLE }; }
       return { targetSpeed: 0 };
     },
   },
@@ -554,6 +555,51 @@ const StateHandlers: Record<State, Handler> = {
   },
 };
 
+/**
+ * After the snatch: a tug to pull it free, off to a quiet spot with it, and eat it there,
+ * chewing, crumbs falling, until it's gone.
+ */
+function stealing(g: Personality): Result {
+  const sd = g.stateData, head = g.head, b = g.body;
+  if (sd.phase === 'grab') {
+    b.mouthTarget = 1;
+    if (sd.timer > 12) {
+      b.mouthTarget = 0.35;
+      sd.spot = g.eatingSpot();
+      g.planRoute(sd.spot.x, sd.spot.y);
+      sd.phase = 'carry'; sd.timer = 0;
+    }
+    // A moment, jaws clamped, to pull it free.
+    return { targetSpeed: 0 };
+  }
+  if (sd.phase === 'carry') {
+    const wp = g.waypoint(sd.spot.x, sd.spot.y);
+    g.targetAngle = Math.atan2(wp.y - head.y, wp.x - head.x);
+    const burstPhase = g.burstTimer % 70;
+    const targetSpeed = burstPhase < 10 ? 0.2 * S : burstPhase < 50 ? g.speed : 0.35 * S;
+    if (dist(head.x, head.y, sd.spot.x, sd.spot.y) < 6 || sd.timer > 600) { sd.phase = 'eat'; sd.timer = 0; }
+    return { targetSpeed };
+  }
+  // Eat: jaws working, head bobbing, the letter shrinking bite by bite.
+  const t = sd.timer, EAT = 120;
+  b.mouthTarget = Math.floor(t / 7) % 2 === 0 ? 0.6 : 0.1;
+  g.headLook.lookAt(Math.sin(t * 0.5) * 0.2);
+  g.c.reactions.chew(1 - t / EAT);
+  if (t % 22 === 11) {
+    const s = g.snout();
+    g.c.particles.burst(s.x, s.y, g.c.pal.ink, 2, 8);
+  }
+  if (t > EAT) {
+    g.c.reactions.finish(true);
+    g.carrying = false;
+    b.mouthTarget = 0;
+    g.needs.feed(4);
+    g.flick();
+    return { targetSpeed: 0, transition: STATE.IDLE };
+  }
+  return { targetSpeed: 0 };
+}
+
 // ═══════════════════════════════════════════════════════════════════
 // PERSONALITY — orchestrator
 // ═══════════════════════════════════════════════════════════════════
@@ -599,6 +645,8 @@ export class Personality {
   /** The panel it is heading under or hiding beneath. */
   cover: CoverEntry | null = null;
   hideFast = false;
+  /** Has a stolen letter in its mouth. */
+  carrying = false;
   private route: Waypoint[] | null = null;
   private routeAt = 0;
   private routeTo: { x: number; y: number } | null = null;
@@ -636,7 +684,7 @@ export class Personality {
 
   /** Wary geckos like to get under things. */
   wantsCover() {
-    if (this.hideCooldown > 0) return false;
+    if (!HIDING || this.hideCooldown > 0) return false;
     if (Math.random() > 0.02 + 0.06 * (this.traits.traits.awareness ?? 0.5)) return false;
     this.hideFast = false;
     return this.findCover(150);
@@ -653,6 +701,8 @@ export class Personality {
   blink() { this.body.blink(); }
 
   enterState(state: State) {
+    // Interrupted with a stolen letter in its mouth: it drops it.
+    if (this.carrying && state !== STATE.NIBBLE) { this.c.reactions.finish(false); this.carrying = false; }
     // Coming to rest under a panel (after a dash, say) is hiding: it will peek out.
     if ((state === STATE.IDLE || state === STATE.BASKING) && this.body.under && this.c.world.coverAt(this.head.x, this.head.y) && this.findCover(200)) {
       state = STATE.HIDE;
@@ -851,11 +901,32 @@ export class Personality {
 
   dropLetter() { this.letter = null; this.letterAt = null; }
 
-  biteLetter() {
-    if (this.letter && this.c.nibbler.bite(this.letter) && this.letterAt) {
-      this.c.particles.burst(this.letterAt.x, this.letterAt.y, this.c.pal.ink, 4, 14);
-    }
+  /** Snatch the target letter out of its word: hidden there, and now in its mouth. */
+  stealLetter() {
+    const t = this.letter;
     this.dropLetter();
+    if (!t || !this.c.nibbler.bite(t)) return false;
+    this.c.reactions.carry(t.range, t.ch);
+    this.carrying = true;
+    this.body.flickTongue();
+    return true;
+  }
+
+  /** Where the snout tip is, in art px (as drawn). */
+  snout() {
+    const b = this.body, a = b.headAngle;
+    return b.project(b.pts[0].x + Math.cos(a) * 1.5, b.pts[0].y + Math.sin(a) * 1.5, b.z[0]);
+  }
+
+  /** Somewhere quiet nearby to eat: off the words, out in the open. */
+  eatingSpot() {
+    const w = this.c.world, h = this.head;
+    for (let i = 0; i < 16; i++) {
+      const a = this.angle + Math.PI + (Math.random() - 0.5) * 2.4, d = 20 + Math.random() * 25;
+      const q = w.clampToBounds(h.x + Math.cos(a) * d, h.y + Math.sin(a) * d, 10);
+      if (w.groundAt(q.x, q.y) === 0 && !w.onText(q.x, q.y, 3)) return q;
+    }
+    return { x: h.x, y: h.y };
   }
 
   get stateName() { return this.state + (this.petted ? '+petted' : ''); }

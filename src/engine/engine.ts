@@ -75,6 +75,7 @@ export class PetEngine {
     const doc = this.win.document;
     this.reactions.attach();
     doc.body.appendChild(this.canvas);
+    this.reactions.attachTop();
     this.world.px = this.opts.px;
     this.resize();
     this.world.scan();
@@ -91,7 +92,7 @@ export class PetEngine {
     const body = this.body, world = this.world;
     body.ground = (x, y) => (body.under && world.coverAt(x, y) ? 0 : world.groundAt(x, y));
     this.c = {
-      body: this.body, world: this.world, input: this.input, swarm: this.swarm, nibbler: this.nibbler,
+      body: this.body, world: this.world, input: this.input, swarm: this.swarm, nibbler: this.nibbler, reactions: this.reactions,
       particles: this.particles, pal: this.pals[0], opts: this.opts, now: performance.now(), pointer: null, pointerSpeed: 0,
     };
     this.brain = new Personality(this.c, !at);
@@ -268,6 +269,10 @@ export class PetEngine {
       g.clip('evenodd');
     }
     this.renderer.draw(g, this.body, pal);
+    if (this.brain.carrying) {
+      const s = this.brain.snout(), px = this.opts.px;
+      this.reactions.hold((s.x + 0.5) * px, (s.y + 0.5) * px, this.body.headAngle);
+    }
     this.reactions.draw();
     if (covers.length) g.restore();
     for (const b of this.swarm.bugs) if (b.z >= 1) b.draw(g, pal, this.frame);

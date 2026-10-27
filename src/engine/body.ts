@@ -19,7 +19,7 @@ import { TAU, angleDiff, approach, approachAngle, clamp, lerp, noise1, rand } fr
  * Spacing between points is kept in 3D, so where the body is steep it bunches up as
  * seen from above. At the foot of a step it hesitates, then scrambles up; at the top of
  * a drop it stops with its head out over the edge and peers about before picking its
- * way down. In a narrow gap it squeezes thinner.
+ * way down.
  *
  * It can be picked up: while held, the gripped point follows the pointer, the rest
  * dangles and squirms with the legs paddling, high above its shadow.
@@ -461,17 +461,6 @@ export class Body {
     }
     for (let i = 0; i < SPINE; i++) {
       this.z[i] = approach(this.z[i], zt[i], 25, dt);
-      // Squeezing: how much room is there either side before the ground rises?
-      let target = 1;
-      if (!this.under) {
-        const p = this.pts[i], f = this.forward(i), lx = -f.y, ly = f.x;
-        const room = (side: number) => {
-          for (let d = 0.5; d <= 6; d += 0.5) if (this.ground(p.x + lx * side * d, p.y + ly * side * d) > this.z[i] + 0.8) return d;
-          return 6;
-        };
-        target = clamp((room(1) + room(-1) - 1) / (2 * halfWidth(i) + 5), 0.65, 1);
-      }
-      this.squeeze[i] = approach(this.squeeze[i], target, 10, dt);
     }
   }
 

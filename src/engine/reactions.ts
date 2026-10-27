@@ -1,10 +1,12 @@
 /*
  * The workspace reacting to the gecko, so it feels like something it touches.
  *
- * Letters: when a foot comes down on a letter, the letter dips and springs back. The
- * note itself is never touched. The real letter is painted transparent for a moment with
- * a CSS highlight while a copy, drawn in the same font and colour on a full-resolution
- * canvas just under the gecko, does the moving.
+ * Letters: when a foot comes down on a letter, the letter is pressed down a touch and
+ * settles back, as type would under a small weight. The note itself is never touched:
+ * the real letter is painted transparent for a moment with a CSS highlight while a copy,
+ * drawn in the same font and colour on a full-resolution canvas just under the gecko,
+ * does the moving. A letter the gecko has stolen is drawn in its mouth on a second
+ * layer just above it.
  *
  * Interface: tabs, ribbon icons, file and folder names, status bar items and toolbar
  * icons give a little jiggle when stepped on — a Web Animation that adds to whatever
@@ -19,23 +21,30 @@ const JIGGLE = [
   '.workspace-tab-header', '.side-dock-ribbon-action', '.nav-file-title', '.nav-folder-title',
   '.tree-item-self', '.status-bar-item', '.view-action', '.clickable-icon', '.mobile-navbar-action',
 ].join(', ');
-const LETTER_LIFE = 0.6;
+const LETTER_LIFE = 0.35;
 const MAX_LETTERS = 48;
+
+interface Glyph { ch: string; font: string; color: string; }
 
 interface Letter {
   range: Range; node: Text; offset: number;
   ch: string; font: string; color: string;
   x: number; baseline: number;
-  t: number; strength: number; dx: number; dy: number; spin: number;
+  t: number; strength: number;
 }
 
 export class Reactions {
   readonly canvas: HTMLCanvasElement;
   private ctx: CanvasRenderingContext2D;
+  /** Above the gecko: the letter in its mouth. */
+  private top: HTMLCanvasElement;
+  private topCtx: CanvasRenderingContext2D;
   private letters: Letter[] = [];
   private highlight: Highlight | null = null;
   private jiggled = new WeakMap<Element, number>();
   private dirty = false;
+  /** A stolen letter in the gecko's mouth: where it is (CSS px), how much is left of it. */
+  private carried: (Glyph & { x: number; y: number; angle: number; left: number; drop: number }) | null = null;
 
   constructor(private win: Window) {
     const doc = win.document;
@@ -43,26 +52,35 @@ export class Reactions {
     this.canvas.className = 'pixel-pet-letters';
     this.canvas.setAttribute('aria-hidden', 'true');
     this.ctx = this.canvas.getContext('2d')!;
+    this.top = doc.createElement('canvas');
+    this.top.className = 'pixel-pet-carried';
+    this.top.setAttribute('aria-hidden', 'true');
+    this.topCtx = this.top.getContext('2d')!;
     const reg = (win as unknown as { CSS?: { highlights?: HighlightRegistry } }).CSS?.highlights;
     const H = (win as unknown as { Highlight?: typeof Highlight }).Highlight;
     if (reg && H) { this.highlight = new H(); reg.set(HIGHLIGHT, this.highlight); }
   }
 
+  /** The letters layer goes in before the gecko's canvas, the carried-letter layer after it. */
   attach() { this.win.document.body.appendChild(this.canvas); this.resize(); }
+  attachTop() { this.win.document.body.appendChild(this.top); this.resize(); }
 
   destroy() {
     this.letters = [];
     this.highlight?.clear();
     (this.win as unknown as { CSS?: { highlights?: HighlightRegistry } }).CSS?.highlights?.delete(HIGHLIGHT);
     this.canvas.remove();
+    this.top.remove();
   }
 
   resize() {
     const dpr = this.win.devicePixelRatio || 1;
-    this.canvas.width = Math.ceil(this.win.innerWidth * dpr);
-    this.canvas.height = Math.ceil(this.win.innerHeight * dpr);
-    this.canvas.style.width = `${this.win.innerWidth}px`;
-    this.canvas.style.height = `${this.win.innerHeight}px`;
+    for (const c of [this.canvas, this.top]) {
+      c.width = Math.ceil(this.win.innerWidth * dpr);
+      c.height = Math.ceil(this.win.innerHeight * dpr);
+      c.style.width = `${this.win.innerWidth}px`;
+      c.style.height = `${this.win.innerHeight}px`;
+    }
     this.dirty = true;
   }
 
@@ -82,9 +100,39 @@ export class Reactions {
     }
   }
 
-  get active() { return this.letters.length > 0; }
+  get active() { return this.letters.length > 0 || !!this.carried; }
+
+  /** Take a letter in the mouth (its real one is hidden by the nibbler). */
+  carry(range: Range, ch: string) {
+    const el = range.startContainer.parentElement;
+    if (!el) return;
+    const cs = this.win.getComputedStyle(el);
+    this.carried = { ch, font: `${cs.fontStyle} ${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`, color: cs.color, x: 0, y: 0, angle: 0, left: 1, drop: 0 };
+    this.dirty = true;
+  }
+
+  /** Keep the carried letter at the snout (CSS px), pointing the way the head does. */
+  hold(x: number, y: number, angle: number) {
+    const c = this.carried;
+    if (!c || c.drop > 0) return;
+    c.x = x; c.y = y; c.angle = angle;
+    this.dirty = true;
+  }
+
+  /** How much of the carried letter is left, 1 → 0 as it is eaten. */
+  chew(left: number) { if (this.carried) { this.carried.left = Math.max(0, left); this.dirty = true; } }
+
+  /** Swallowed, or let fall: it falls a little and fades. */
+  finish(eaten: boolean) {
+    if (!this.carried) return;
+    if (eaten) this.carried = null;
+    else this.carried.drop = 0.001;
+    this.dirty = true;
+  }
 
   update(dt: number) {
+    const c = this.carried;
+    if (c && c.drop > 0) { c.drop += dt; if (c.drop > 0.35) this.carried = null; this.dirty = true; }
     if (!this.letters.length) return;
     for (const l of this.letters) l.t += dt;
     const done = this.letters.filter((l) => l.t >= LETTER_LIFE || l.range.collapsed);
@@ -95,24 +143,41 @@ export class Reactions {
 
   draw() {
     if (!this.dirty) return;
-    this.dirty = this.letters.length > 0;
+    this.dirty = this.letters.length > 0 || !!this.carried;
     const g = this.ctx, dpr = this.win.devicePixelRatio || 1;
     g.setTransform(1, 0, 0, 1, 0, 0);
     g.clearRect(0, 0, this.canvas.width, this.canvas.height);
     g.textBaseline = 'alphabetic';
+    g.textAlign = 'left';
     for (const l of this.letters) {
-      // A damped spring: pushed along the step and down into the page, then back.
-      const e = Math.exp(-7 * l.t), w = Math.cos(l.t * 24);
-      const push = l.strength * e;
-      const ox = l.dx * push * 2.2, oy = (l.dy * 2 + 2.6) * push * w;
-      const squash = 1 - 0.26 * l.strength * Math.exp(-10 * l.t) * w;
+      // Pressed straight down into the page a touch, slightly flattened, then settling.
+      const press = Math.min(1.3, l.strength) * Math.exp(-11 * l.t) * Math.sin(Math.min(1, l.t / 0.06) * Math.PI / 2);
       g.setTransform(dpr, 0, 0, dpr, 0, 0);
-      g.translate(l.x + ox, l.baseline + oy);
-      g.rotate(l.spin * push * w);
-      g.scale(1 + (1 - squash) * 0.6, squash);
+      g.translate(l.x, l.baseline + press * 1.1);
+      g.scale(1 + press * 0.04, 1 - press * 0.07);
       g.font = l.font;
       g.fillStyle = l.color;
       g.fillText(l.ch, 0, 0);
+    }
+    const t = this.topCtx;
+    t.setTransform(1, 0, 0, 1, 0, 0);
+    t.clearRect(0, 0, this.top.width, this.top.height);
+    const c = this.carried;
+    if (c) {
+      // Gripped crosswise in the jaws, shrinking as it is eaten.
+      const g = t;
+      g.setTransform(dpr, 0, 0, dpr, 0, 0);
+      g.globalAlpha = c.drop > 0 ? Math.max(0, 1 - c.drop / 0.35) : 1;
+      g.translate(c.x, c.y + c.drop * 14);
+      g.rotate(c.angle + Math.PI / 2);
+      g.font = c.font;
+      g.textAlign = 'center';
+      g.textBaseline = 'middle';
+      const s = 0.8 * (0.35 + 0.65 * c.left);
+      g.scale(s, s);
+      g.fillStyle = c.color;
+      g.fillText(c.ch, 0, 0);
+      g.globalAlpha = 1;
     }
   }
 
@@ -145,7 +210,7 @@ export class Reactions {
     this.letters.push({
       range: hit, node, offset, ch: text[offset], font, color: cs.color,
       x: box.left, baseline: box.top + (m.fontBoundingBoxAscent || box.height * 0.8),
-      t: 0, strength, dx, dy, spin: (Math.random() < 0.5 ? -1 : 1) * 0.12,
+      t: 0, strength,
     });
     this.highlight.add(hit);
     this.dirty = true;

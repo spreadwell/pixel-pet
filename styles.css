@@ -37,3 +37,11 @@ body.pixel-pet-holding * {
 ::highlight(pixel-pet-jostle) {
   color: transparent;
 }
+/* A letter the pet has stolen, carried in its mouth: just above the pet. */
+.pixel-pet-carried {
+  position: fixed;
+  left: 0;
+  top: 0;
+  pointer-events: none;
+  z-index: calc(var(--layer-popover, 30) - 1);
+}
