@@ -7,13 +7,13 @@ const production = mode === 'production';
 const harness = mode === 'harness';
 
 const context = await esbuild.context(harness ? {
-  entryPoints: ['harness/harness.ts'],
+  entryPoints: ['harness/harness.ts', 'harness/studio.ts'],
   bundle: true,
   format: 'iife',
   target: 'es2022',
   platform: 'browser',
   sourcemap: 'inline',
-  outfile: 'harness/harness.js',
+  outdir: 'harness',
   logLevel: 'info',
 } : {
   entryPoints: ['src/main.ts'],

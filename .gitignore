@@ -1,6 +1,7 @@
 node_modules/
 dist/
 harness/harness.js
+harness/studio.js
 main.js
 *.zip
 *.log

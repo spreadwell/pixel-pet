@@ -1,15 +1,11 @@
 import { clamp } from './math';
 
 export interface Palette {
-  outline: string;
-  flank: string;
+  /** The lit side of the body. */
   base: string;
-  dorsal: string;
-  spot: string;
-  band: string;
+  /** The side turned away from the light. */
+  shade: string;
   eye: string;
-  eyeShine: string;
-  lid: string;
   tongue: string;
   shadow: string;
   ink: string;      // theme text colour, for crumbs and bugs
@@ -67,15 +63,9 @@ export function buildPalette(doc: Document, seedExpr: string, warmth = 0): Palet
   const l = clamp(l0, 0.45, 0.62) + 0.05 * warmth;
 
   return {
-    outline: hsl(h - 6, s * 0.9, l * 0.38),
-    flank: hsl(h - 3, s, l * 0.82),
     base: hsl(h, s, l),
-    dorsal: hsl(h + 4, s * 0.95, Math.min(0.8, l + 0.08)),
-    spot: hsl(h - 14, s * 0.7, l * 0.55),
-    band: hsl(h - 8, s * 0.85, l * 0.76),
-    eye: hsl(h - 25, 0.3, 0.07),
-    eyeShine: 'rgba(255,255,255,0.85)',
-    lid: hsl(h, s, l * 0.9),
+    shade: hsl(h - 4, Math.min(1, s * 1.05), l * 0.68),
+    eye: hsl(h - 25, 0.35, 0.1),
     tongue: 'hsl(350 70% 66%)',
     shadow: dark ? 'rgba(0,0,0,0.42)' : 'rgba(40,30,10,0.16)',
     ink: `rgb(${ink.join(',')})`,

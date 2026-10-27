@@ -202,7 +202,17 @@ export class PetEngine {
     g.clearRect(0, 0, this.canvas.width, this.canvas.height);
     const pal = this.pals[Math.round(this.brain.color.warmth * 2)];
     for (const b of this.swarm.bugs) if (b.z < 1) b.draw(g, pal, this.frame);
+    // Side panels lie over the note: whatever part of the gecko has crept under one is hidden.
+    const covers = this.world.covers;
+    if (covers.length) {
+      g.save();
+      g.beginPath();
+      g.rect(0, 0, this.canvas.width, this.canvas.height);
+      for (const c of covers) g.rect(Math.round(c.x), Math.round(c.y), Math.round(c.w), Math.round(c.h));
+      g.clip('evenodd');
+    }
     this.renderer.draw(g, this.body, pal);
+    if (covers.length) g.restore();
     for (const b of this.swarm.bugs) if (b.z >= 1) b.draw(g, pal, this.frame);
     this.particles.draw(g);
 

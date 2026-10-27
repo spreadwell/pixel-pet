@@ -15,36 +15,40 @@ import { TAU, angleDiff, approach, approachAngle, clamp, lerp, noise1, rand } fr
  */
 
 export const SPINE = 36;
-export const NECK = 6;
+export const NECK = 4;
+/** Spine indices of the shoulder and hip girdles. */
+export const SHOULDER = 8;
+export const HIP = 17;
 const SEG = 1;
 
 const SWING_FRACTION = 0.4;
 
-// Half-width profile, snout → tail tip. Leopard geckos carry a fat, banded tail.
+// Half-width profile, snout → tail tip. Drawn in the style of classic lizard sprites: a
+// small blunt head, a pinched neck, a slim trunk a few pixels wide, and a whip tail
+// longer than the body that tapers to a single pixel.
 const PROFILE = [
-  1.5, 2.2, 2.8, 3.2, 3.35, 3.1,        // head (0-5), broad and widest at the jaw
-  2.6, 2.9, 3.4, 3.8, 4.0, 4.15, 4.2,   // neck → shoulders → trunk
-  4.2, 4.2, 4.15, 4.05, 3.9, 3.6, 3.3,
-  3.0, 2.7,                             // pelvis
-  2.55, 2.75, 2.85, 2.85, 2.75, 2.55,   // fat tail
-  2.3, 2.0, 1.7, 1.4, 1.15, 0.95, 0.75, 0.6,
+  0.8, 1.45, 1.95, 2.05, 1.75,          // head (0-4), widest across the eyes
+  1.2, 1.25, 1.45,                      // neck
+  1.75, 1.85, 1.9, 1.9, 1.9, 1.85, 1.8, 1.7, 1.6, 1.5,  // shoulders → pelvis
+  ...Array.from({ length: SPINE - 18 }, (_, k) => 0.62 + 0.75 * Math.pow(1 - k / (SPINE - 19), 1.1)),
 ];
 
 /** Standing-wave shape of trunk flexion: girdles out of phase with mid-trunk. */
 function flexShape(i: number): number {
+  const mid = (SHOULDER + HIP) / 2;
   if (i <= NECK) return 0;
-  if (i < 9) return (-0.5 * (i - NECK)) / 3;
-  if (i <= 14) return lerp(-0.5, 1, (i - 9) / 5);
-  if (i <= 20) return lerp(1, -0.8, (i - 14) / 6);
-  return lerp(-0.8, 0, clamp((i - 20) / 5, 0, 1));
+  if (i < SHOULDER) return (-0.5 * (i - NECK)) / (SHOULDER - NECK);
+  if (i <= mid) return lerp(-0.5, 1, (i - SHOULDER) / (mid - SHOULDER));
+  if (i <= HIP) return lerp(1, -0.8, (i - mid) / (HIP - mid));
+  return lerp(-0.8, 0, clamp((i - HIP) / 4, 0, 1));
 }
 
-const BEND = (i: number) => (i <= NECK + 1 ? 0.42 : i < 21 ? 0.2 : i < 27 ? 0.3 : 0.38);
+const BEND = (i: number) => (i <= NECK + 1 ? 0.42 : i <= HIP ? 0.22 : i < 26 ? 0.28 : 0.36);
 
 export const halfWidth = (i: number) => PROFILE[Math.min(i, PROFILE.length - 1)];
-export const TORSO_FIRST = 8;
-export const TORSO_LAST = 19;
-export const TAIL_FIRST = 22;
+export const TORSO_FIRST = SHOULDER;
+export const TORSO_LAST = HIP - 1;
+export const TAIL_FIRST = HIP + 1;
 
 export interface Pt { x: number; y: number; }
 
@@ -54,15 +58,20 @@ interface LegDef {
 }
 
 // Rest spots sit well inside each leg's reach, so a full stride either side of rest
-// (±0.3 stride) never over-extends the limb.
+// (±0.3 stride) never over-extends the limb. Strides are long — a lizard covers most
+// of its trunk length per cycle — so each foot sweeps visibly from ahead of its girdle
+// to well behind it.
 const LEGS: LegDef[] = [
-  { seg: 9, side: -1, front: true, l1: 3.2, l2: 3.0, restFwd: 1.2, restOut: 3.8, phase: 0 },
-  { seg: 9, side: 1, front: true, l1: 3.2, l2: 3.0, restFwd: 1.2, restOut: 3.8, phase: 0.5 },
-  { seg: 19, side: -1, front: false, l1: 3.5, l2: 3.3, restFwd: -0.8, restOut: 4.2, phase: 0.5 },
-  { seg: 19, side: 1, front: false, l1: 3.5, l2: 3.3, restFwd: -0.8, restOut: 4.2, phase: 0 },
+  { seg: SHOULDER, side: -1, front: true, l1: 2.6, l2: 2.6, restFwd: 1.0, restOut: 2.5, phase: 0 },
+  { seg: SHOULDER, side: 1, front: true, l1: 2.6, l2: 2.6, restFwd: 1.0, restOut: 2.5, phase: 0.5 },
+  { seg: HIP, side: -1, front: false, l1: 2.8, l2: 2.8, restFwd: -1.5, restOut: 2.7, phase: 0.5 },
+  { seg: HIP, side: 1, front: false, l1: 2.8, l2: 2.8, restFwd: -1.5, restOut: 2.7, phase: 0 },
 ];
-const STRIDE_MIN = 5.5;
+const STRIDE_MIN = 6.5;
 const STRIDE_MAX = 8.5;
+/** A limb stretched past this fraction of its length looks locked straight. */
+const COMFORT = 0.9;
+const MAX_STEP_HZ = 8;
 
 export class Leg {
   foot: Pt = { x: 0, y: 0 };
@@ -71,7 +80,7 @@ export class Leg {
   swinging = false;
   t = 0;
   dur = 0.1;
-  private from: Pt = { x: 0, y: 0 };
+  from: Pt = { x: 0, y: 0 };
   private cycle = 0;
   /** 0..1 height of a lifted foot, for shadows. */
   lift = 0;
@@ -95,12 +104,14 @@ export class Leg {
 
   syncCycle(gaitPhase: number) { this.cycle = Math.floor(gaitPhase + this.def.phase); }
 
-  advance(dt: number, target: Pt) {
+  /** `out` is the sideways direction away from the body: the foot swings in an arc. */
+  advance(dt: number, target: Pt, out: Pt) {
     if (!this.swinging) { this.lift = 0; return; }
     this.t = Math.min(1, this.t + dt / this.dur);
     const e = this.t < 0.5 ? 2 * this.t * this.t : 1 - 2 * (1 - this.t) * (1 - this.t);
-    this.foot.x = lerp(this.from.x, target.x, e);
-    this.foot.y = lerp(this.from.y, target.y, e);
+    const arc = Math.sin(this.t * Math.PI) * 0.5;
+    this.foot.x = lerp(this.from.x, target.x, e) + out.x * arc;
+    this.foot.y = lerp(this.from.y, target.y, e) + out.y * arc;
     this.lift = Math.sin(this.t * Math.PI);
     if (this.t >= 1) { this.swinging = false; this.lift = 0; }
   }
@@ -123,6 +134,8 @@ export class Body {
   headYaw = 0;
   gaitPhase = 0;
   stride = STRIDE_MIN;
+  /** Moving faster than the legs can visibly step: planted feet slide instead. */
+  private skitter = false;
   legs = LEGS.map((d) => new Leg(d));
   time = rand(0, 100);
 
@@ -202,8 +215,10 @@ export class Body {
 
     const ds = this.speed * dt;
     // Faster means longer strides first (up to what the legs can reach), then quicker ones.
-    this.stride = approach(this.stride, clamp(STRIDE_MIN + this.speed * 0.045, STRIDE_MIN, STRIDE_MAX), 5, dt);
-    this.gaitPhase += ds / this.stride;
+    this.stride = approach(this.stride, clamp(STRIDE_MIN + this.speed * 0.05, STRIDE_MIN, STRIDE_MAX), 5, dt);
+    // Above ~8 steps a second legs only flicker on screen, so a sprint skitters instead.
+    this.skitter = ds / this.stride > MAX_STEP_HZ * dt;
+    this.gaitPhase += Math.min(ds / this.stride, MAX_STEP_HZ * dt);
     const walking = clamp(this.speed / 10, 0, 1);
     const waveAmp = (0.12 + 0.08 * sNorm) * walking;
     const wave = Math.sin(this.gaitPhase * TAU) * waveAmp;
@@ -236,7 +251,7 @@ export class Body {
       const maxB = BEND(i);
       let d = angleDiff(prevAng, ang);
       if (this.curl > 0.001) {
-        const bias = this.curlDir * (i < TAIL_FIRST ? 0.07 : 0.24) * this.curl;
+        const bias = this.curlDir * (i < TAIL_FIRST ? 0.07 : 0.18) * this.curl;
         d = lerp(d, bias, Math.min(1, dt * 3 * this.curl));
       }
       d = clamp(d, -maxB, maxB);
@@ -258,7 +273,7 @@ export class Body {
       const a = path[i - 1], c = path[Math.min(SPINE - 1, i + 1)];
       const fx = a.x - c.x, fy = a.y - c.y, fl = Math.hypot(fx, fy) || 1;
       let off = s * flexShape(i);
-      if (i > 20) off += Math.sin(this.gaitPhase * TAU - (i - 20) * 0.45) * this.flexAmp * 0.7 * Math.min(1, (i - 20) / 4);
+      if (i > HIP) off += Math.sin(this.gaitPhase * TAU - (i - HIP) * 0.4) * this.flexAmp * 0.8 * Math.min(1, (i - HIP) / 4);
       this.pts[i].x = p.x + (fy / fl) * off;
       this.pts[i].y = p.y - (fx / fl) * off;
     }
@@ -297,8 +312,8 @@ export class Body {
 
   /** Twitch offset applied to tail points at render time (lateral, art px). */
   tailOffset(i: number): number {
-    if (i < SPINE - 9 || this.twitch < 0.01) return 0;
-    const k = (i - (SPINE - 9)) / 9;
+    if (i < SPINE - 10 || this.twitch < 0.01) return 0;
+    const k = (i - (SPINE - 10)) / 10;
     return Math.sin(this.time * 17 + k * 2.2) * this.twitch * k * k * 2.2;
   }
 
@@ -337,8 +352,8 @@ export class Body {
           const dur = clamp((this.stride * SWING_FRACTION) / Math.max(this.speed, 1), 0.04, 0.28);
           leg.startSwing(dur);
           swingingCount++;
-        } else if (stretch > reach * 1.05 || (!moving && off > 2.4 && swingingCount < 2)) {
-          leg.startSwing(stretch > reach ? 0.07 : 0.13);
+        } else if ((stretch > reach * COMFORT && swingingCount < 2 && !this.skitter) || stretch > reach || (!moving && off > 2 && swingingCount < 2)) {
+          leg.startSwing(stretch > reach * COMFORT ? 0.08 : 0.13);
           swingingCount++;
         }
         if (!moving) leg.syncCycle(this.gaitPhase);
@@ -353,15 +368,23 @@ export class Body {
           x: rest.x + vx * remaining + f.x * lead,
           y: rest.y + vy * remaining + f.y * lead,
         };
-        leg.advance(dt, target);
+        // Land within comfortable reach of where the hip will be, so the limb stays bent.
+        // Check against both the hip now and where it will be on landing.
+        const max = reach * COMFORT * 0.92;
+        for (const h of [{ x: hip.x + vx * remaining, y: hip.y + vy * remaining }, hip]) {
+          const tx = target.x - h.x, ty = target.y - h.y, tl = Math.hypot(tx, ty);
+          if (tl > max) { target.x = h.x + (tx / tl) * max; target.y = h.y + (ty / tl) * max; }
+        }
+        const fs = this.forward(leg.def.seg);
+        leg.advance(dt, target, { x: -fs.y * leg.def.side, y: fs.x * leg.def.side });
       }
 
-      // Never let a foot be dragged beyond physical reach.
+      // Never let a foot be dragged beyond physical reach; in a sprint it slides first.
       const sx = leg.foot.x - hip.x, sy = leg.foot.y - hip.y;
-      const sl = Math.hypot(sx, sy);
-      if (sl > reach) {
-        leg.foot.x = hip.x + (sx / sl) * reach;
-        leg.foot.y = hip.y + (sy / sl) * reach;
+      const sl = Math.hypot(sx, sy), lim = this.skitter ? reach * COMFORT : reach;
+      if (sl > lim) {
+        leg.foot.x = hip.x + (sx / sl) * lim;
+        leg.foot.y = hip.y + (sy / sl) * lim;
       }
 
       leg.knee = this.solveKnee(leg, hip);
@@ -406,5 +429,14 @@ export class Body {
     for (const p of this.pts) { p.x *= f; p.y *= f; }
     for (const p of this.path) { p.x *= f; p.y *= f; }
     for (const l of this.legs) { l.foot.x *= f; l.foot.y *= f; }
+  }
+
+  /** Move the whole animal without disturbing its pose. */
+  translate(dx: number, dy: number) {
+    for (const p of this.pts) { p.x += dx; p.y += dy; }
+    for (const p of this.path) { p.x += dx; p.y += dy; }
+    for (const l of this.legs) {
+      for (const q of [l.foot, l.hip, l.knee, l.from]) { q.x += dx; q.y += dy; }
+    }
   }
 }

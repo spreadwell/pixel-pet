@@ -1,16 +1,19 @@
-import { Body, Leg, NECK, SPINE, TAIL_FIRST, halfWidth } from './body';
+import { Body, Leg, SPINE, halfWidth } from './body';
 import type { Palette } from './palette';
-import { hash2 } from './math';
 
 /*
- * Pixel renderer for the gecko. The body is rasterised from the spine at sub-pixel
+ * Pixel renderer for the gecko, in the flat two-tone style of classic lizard sprites:
+ * no outline, no texture, one side of the body lit and the other in shade, one-pixel
+ * limbs ending in little claw feet. The body is rasterised from the spine at sub-pixel
  * precision into a small depth buffer (one disc per spine point, nearest disc wins), so
  * the silhouette changes pixel-by-pixel as the animal moves instead of jumping as a
- * whole. Each covered pixel remembers which spine point owns it and its signed lateral
- * position, which lets spots and tail bands stay attached to the body as it bends.
+ * whole. Each covered pixel remembers which side of the spine it lies on.
  */
 
 interface LegPixel { x: number; y: number; c: string; lift: number; }
+
+// Light falls from the upper left of the screen, whichever way the animal faces.
+const LIGHT = { x: -0.6, y: -0.8 };
 
 export class GeckoRenderer {
   private depth = new Float32Array(0);
@@ -21,9 +24,16 @@ export class GeckoRenderer {
   private bh = 0;
   private bx = 0;
   private by = 0;
-  private seed = Math.floor(Math.random() * 1e6);
+  /** Which side of the spine (+1 = animal's left) faces the light. Switches with hysteresis. */
+  private lit: 1 | -1 = 1;
 
   draw(ctx: CanvasRenderingContext2D, b: Body, pal: Palette) {
+    // The left-hand normal of the body; flip which side is lit only once it clearly
+    // faces away, so the shading never flickers with the gait.
+    const toLight = -Math.sin(b.heading) * LIGHT.x + Math.cos(b.heading) * LIGHT.y;
+    if (toLight > 0.25) this.lit = 1;
+    else if (toLight < -0.25) this.lit = -1;
+
     this.rasteriseBody(b);
     const legs = this.legPixels(b, pal);
 
@@ -52,7 +62,7 @@ export class GeckoRenderer {
     }
 
     for (const p of legs) { ctx.fillStyle = p.c; ctx.fillRect(p.x, p.y, 1, 1); }
-    this.paintBody(ctx, b, pal);
+    this.paintBody(ctx, pal);
     this.paintHead(ctx, b, pal);
   }
 
@@ -107,36 +117,12 @@ export class GeckoRenderer {
     }
   }
 
-  private paintBody(ctx: CanvasRenderingContext2D, b: Body, pal: Palette) {
-    const { bw, bh, bx, by, depth, seg, lat } = this;
-    const filled = (x: number, y: number) => x >= 0 && y >= 0 && x < bw && y < bh && depth[y * bw + x] > 0;
+  private paintBody(ctx: CanvasRenderingContext2D, pal: Palette) {
+    const { bw, bh, bx, by, depth, lat } = this;
     for (let y = 0; y < bh; y++) for (let x = 0; x < bw; x++) {
       const k = y * bw + x;
       if (depth[k] <= 0) continue;
-      const i = seg[k];
-      const l = lat[k];
-      const edge = !filled(x - 1, y) || !filled(x + 1, y) || !filled(x, y - 1) || !filled(x, y + 1);
-      let c: string;
-      if (edge) c = pal.outline;
-      else {
-        const al = Math.abs(l);
-        // Lit from above: a soft lighter crown along the back, darker flanks.
-        c = al > 0.62 ? pal.flank : al < 0.3 && i >= 2 && i < TAIL_FIRST + 4 && (i + Math.round(l * 3)) % 3 !== 0 ? pal.dorsal : pal.base;
-        // Body-space coordinates in pixels: u along the spine, v across it.
-        const v = Math.round(l * halfWidth(i) + 8);
-        if (i >= TAIL_FIRST) {
-          // Broad soft bands across the tail, speckled at the edges.
-          const band = Math.floor((i - TAIL_FIRST + 1) / 3) % 2 === 1;
-          if (band && al < 0.8) c = pal.band;
-          else if (hash2(i * 29 + v, this.seed + 3) < 0.12) c = pal.spot;
-        } else if (i >= 4 && al < 0.85) {
-          // Leopard speckles fixed to the body: single pixels that sometimes pair up.
-          const h = hash2(i * 31 + v, this.seed);
-          const pair = hash2((i - 1) * 31 + v, this.seed) < 0.09;
-          if (h < (i < NECK + 1 ? 0.14 : 0.2) || (pair && i > NECK)) c = pal.spot;
-        }
-      }
-      ctx.fillStyle = c;
+      ctx.fillStyle = (lat[k] >= 0 ? 1 : -1) === this.lit ? pal.base : pal.shade;
       ctx.fillRect(bx + x, by + y, 1, 1);
     }
   }
@@ -151,24 +137,17 @@ export class GeckoRenderer {
     };
     const px = (p: { x: number; y: number }, c: string) => { ctx.fillStyle = c; ctx.fillRect(p.x, p.y, 1, 1); };
 
-    // Eyes sit on the sides of the skull and bulge past the outline.
-    for (const s of [1, -1]) {
-      const closed = b.lid > 0.55;
-      // Leopard geckos have big dark eyes set into the side of the skull, inside the
-      // outline, with a bright rim of skin above them.
-      const eye = at(3, s * (halfWidth(3) - 1.25));
-      const front = at(2, s * (halfWidth(2) - 1.05));
-      px(eye, closed ? pal.outline : pal.eye);
-      px(front, closed ? pal.flank : pal.eye);
-      if (!closed) px(at(3, s * (halfWidth(3) - 2.2)), pal.dorsal);
+    // One dark pixel per eye, on the sides of the skull; closed, it reads as shade.
+    for (const side of [1, -1]) {
+      px(at(3, side * (halfWidth(3) - 0.5)), b.lid > 0.55 ? pal.shade : pal.eye);
     }
 
     // Mouth: when open, the snout tip splits.
     const tip = { x: b.pts[0].x + fx * 0.9, y: b.pts[0].y + fy * 0.9 };
     if (b.mouth > 0.35) {
       px({ x: Math.floor(tip.x), y: Math.floor(tip.y) }, pal.tongue);
-      px({ x: Math.floor(tip.x + lx * 1.1), y: Math.floor(tip.y + ly * 1.1) }, pal.outline);
-      px({ x: Math.floor(tip.x - lx * 1.1), y: Math.floor(tip.y - ly * 1.1) }, pal.outline);
+      px({ x: Math.floor(tip.x + lx * 1.1), y: Math.floor(tip.y + ly * 1.1) }, pal.shade);
+      px({ x: Math.floor(tip.x - lx * 1.1), y: Math.floor(tip.y - ly * 1.1) }, pal.shade);
     }
 
     const t = b.tongue;
@@ -202,37 +181,31 @@ export class GeckoRenderer {
     const f = b.forward(leg.def.seg);
     const side = leg.def.side;
     const ox = -f.y * side, oy = f.x * side;
+    const c = side === this.lit ? pal.base : pal.shade;
     const seen = new Set<number>();
-    const put = (x: number, y: number, c: string, l: number) => {
+    const put = (x: number, y: number, l: number) => {
       const ix = Math.floor(x), iy = Math.floor(y);
       const key = iy * 100003 + ix;
       if (seen.has(key)) return;
       seen.add(key);
       out.push({ x: ix, y: iy, c, lift: l });
     };
-    const line = (ax: number, ay: number, cx: number, cy: number, c: string, l0: number, l1: number) => {
+    const line = (ax: number, ay: number, cx: number, cy: number, l0: number, l1: number) => {
       const n = Math.max(1, Math.ceil(Math.hypot(cx - ax, cy - ay) * 2));
       for (let s = 0; s <= n; s++) {
         const u = s / n;
-        put(ax + (cx - ax) * u, ay + (cy - ay) * u, c, l0 + (l1 - l0) * u);
+        put(ax + (cx - ax) * u, ay + (cy - ay) * u, l0 + (l1 - l0) * u);
       }
     };
-    // A chunky upper limb (two pixels, lit on top, shaded behind) and a slimmer forearm.
-    const bx = leg.def.front ? -f.x : f.x, by = leg.def.front ? -f.y : f.y;
-    line(hip.x, hip.y, knee.x, knee.y, pal.base, 0, lift * 0.5);
-    line(hip.x + bx * 0.9, hip.y + by * 0.9, knee.x + bx * 0.6, knee.y + by * 0.6, pal.flank, 0, lift * 0.5);
-    put(knee.x, knee.y, pal.flank, lift * 0.5);
-    line(knee.x, knee.y, foot.x, foot.y, pal.flank, lift * 0.5, lift);
-
-    if (lift > 0.25) { put(foot.x, foot.y, pal.flank, lift); return; }
-    // Splayed toes when planted. Forefeet point forward-out, hind feet out-back.
+    line(hip.x, hip.y, knee.x, knee.y, 0, lift * 0.5);
+    line(knee.x, knee.y, foot.x, foot.y, lift * 0.5, lift);
+    if (lift > 0.25) return;
+    // A planted foot spreads two claws: forefeet point forward-out, hind feet out-back.
     const fwdBias = leg.def.front ? Math.atan2(f.y, f.x) : Math.atan2(-f.y, -f.x);
-    const dir = blendAngle(Math.atan2(oy, ox), fwdBias, leg.def.front ? 0.45 : 0.3);
-    for (const spread of [-0.85, -0.28, 0.28, 0.85]) {
-      const a = dir + spread;
-      put(foot.x + Math.cos(a) * 1.5, foot.y + Math.sin(a) * 1.5, pal.outline, 0);
+    const dir = blendAngle(Math.atan2(oy, ox), fwdBias, leg.def.front ? 0.5 : 0.35);
+    for (const spread of [-0.75, 0.75]) {
+      put(foot.x + Math.cos(dir + spread) * 1.2, foot.y + Math.sin(dir + spread) * 1.2, 0);
     }
-    put(foot.x, foot.y, pal.flank, 0);
   }
 }
 

@@ -1,10 +1,10 @@
-import { Body, Drive, halfWidth } from './body';
+import { Body, Drive, TAIL_FIRST, halfWidth } from './body';
 import type { Bug, Particles, Swarm } from './bugs';
 import type { InputTracker } from './input';
 import { angleDiff, clamp, lerp, rand } from './math';
 import type { NibbleTarget, Nibbler } from './nibble';
 import type { Palette } from './palette';
-import type { World } from './world';
+import type { CoverEntry, World } from './world';
 
 // ═══════════════════════════════════════════════════════════════════
 // PERSONALITY
@@ -24,6 +24,9 @@ import type { World } from './world';
 //   - The stats readout is gone. Hunger and sleepiness only show through behaviour.
 //   - New: scare() for pokes, panels and typing; petting; nibbling a letter; and a nap
 //     when the user is away.
+//   - New: side panels are cover. It slips under them, waits, and peeks back out, and
+//     bolts for one when frightened. A pointer over a panel is above it and unseen.
+//     Text is open ground: it dashes across and stops in the gaps, tasting the words.
 //
 // Sections: TRAIT SYSTEM · NEEDS · SUB-BEHAVIOURS · STATE HANDLERS · PERSONALITY
 // Distances are multiples of S (the original's body scale, here in art px) and times
@@ -146,6 +149,7 @@ export const STATE = {
   FLEE: 'flee',
   SLEEP: 'sleep',
   NIBBLE: 'nibble',
+  HIDE: 'hide',
 } as const;
 export type State = (typeof STATE)[keyof typeof STATE];
 
@@ -228,6 +232,7 @@ const StateHandlers: Record<State, Handler> = {
         const homeDist = g.distTo(g.homeX, g.homeY);
         if (g.needs.canSleep()) return { targetSpeed: 0.05 * S, transition: homeDist < 60 * S ? STATE.SLEEP : STATE.EXPLORE };
         if (g.letter) return { targetSpeed: 0.05 * S, transition: STATE.NIBBLE };
+        if (g.wantsCover()) return { targetSpeed: 0.05 * S, transition: STATE.HIDE };
         const nearHome = homeDist < 80 * S;
         const r = Math.random();
         if (nearHome && g.needs.fullness > 0.6 && r < g.needs.fullness) return { targetSpeed: 0.05 * S, transition: STATE.BASKING };
@@ -288,7 +293,9 @@ const StateHandlers: Record<State, Handler> = {
         targetSpeed = g.speed * 0.7;
         sd.wallFollowTimer--;
         if (sd.wallFollowTimer % 30 === 0) g.flick();
-        if (sd.wallFollowTimer <= 0 || d < 15 * S) sd.wallFollowing = false;
+        // A seam that runs on under a panel is where the run ends.
+        const ahead = g.c.world.coverAt(head.x + Math.cos(sd.wallAngle) * 8, head.y + Math.sin(sd.wallAngle) * 8);
+        if (sd.wallFollowTimer <= 0 || d < 15 * S || ahead) sd.wallFollowing = false;
       } else if (!sd.investigating) {
         g.targetAngle = Math.atan2(g.destY - head.y, g.destX - head.x);
         // The explore rhythm: hesitate, dash, slow — over and over.
@@ -296,6 +303,8 @@ const StateHandlers: Record<State, Handler> = {
         if (burstPhase < 15) targetSpeed = 0.15 * S;
         else if (burstPhase < 55) targetSpeed = g.speed;
         else targetSpeed = 0.3 * S;
+        // Text is open ground: no dawdling until it's back in a gap or margin.
+        if (g.c.world.onText(head.x, head.y)) targetSpeed = Math.max(targetSpeed, g.speed);
         g.targetAngle += Math.sin(g.burstTimer * 0.08) * 0.15;
 
         if (d < 15 * S) {
@@ -308,10 +317,16 @@ const StateHandlers: Record<State, Handler> = {
         targetSpeed = 0.05 * S;
         sd.investigateTime++;
         if (sd.investigateTime % 25 === 10) { g.headLook.look(); sd.lookCount++; }
-        if (sd.investigateTime % 40 === 20) g.flick();
+        if (sd.investigateTime % 40 === 20) {
+          // Words nearby get a taste: turn to them first.
+          const w = g.c.world.nearestText(head.x, head.y, 12);
+          if (w) g.headLook.lookAt(angleDiff(g.angle, Math.atan2(w.y - head.y, w.x - head.x)));
+          g.flick();
+        }
         if (sd.investigateTime % 35 === 5) g.blink();
         if (sd.lookCount >= sd.maxLooks) {
           if (g.letter) return { targetSpeed, transition: STATE.NIBBLE };
+          if (g.wantsCover()) return { targetSpeed, transition: STATE.HIDE };
           const nearHome = g.distTo(g.homeX, g.homeY) < 80 * S;
           if (nearHome && g.needs.fullness > 0.7) return { targetSpeed, transition: Math.random() < 0.8 ? STATE.BASKING : STATE.IDLE };
           const r = Math.random();
@@ -330,7 +345,7 @@ const StateHandlers: Record<State, Handler> = {
     update(g) {
       const head = g.head;
       const bug = g.targetBug;
-      const p = g.c.pointer;
+      const p = g.pointer;
       const huntX = bug ? bug.x : p ? p.x : head.x;
       const huntY = bug ? bug.y : p ? p.y : head.y;
       const huntDist = dist(head.x, head.y, huntX, huntY);
@@ -376,6 +391,8 @@ const StateHandlers: Record<State, Handler> = {
       g.angle = lerpAngle(g.angle, g.targetAngle, 0.5);
     },
     update(g) {
+      // Bolt for the nearest panel leading away from the threat, if there is one.
+      if (g.stateTimer === 1 && g.findCover(110, { x: g.threatX, y: g.threatY })) { g.hideFast = true; return { targetSpeed: g.speed, transition: STATE.HIDE }; }
       const mult = g.mildScare || g.c.opts.reducedMotion ? 1.2 : g.traits.resolve('fleeMultiplier');
       const targetSpeed = g.speed * mult;
       g.targetAngle += Math.sin(g.burstTimer * 0.3) * 0.15;
@@ -448,6 +465,72 @@ const StateHandlers: Record<State, Handler> = {
       return { targetSpeed: 0 };
     },
   },
+
+  // Under a side panel: approach its edge, slip under, wait, turn round, peek out and
+  // look about, then come out — or think better of it and go back under.
+  [STATE.HIDE]: {
+    enter(g) { g.stateData = { phase: g.hideFast ? 'slip' : 'approach', timer: 0, wait: 0, looks: 0 }; },
+    update(g) {
+      const sd = g.stateData, e = g.cover, head = g.head;
+      if (!e) return { targetSpeed: 0.05 * S, transition: STATE.IDLE };
+      sd.timer++;
+      // How far the head is past the panel's edge (negative: still outside).
+      const depth = (head.x - e.x) * e.nx + (head.y - e.y) * e.ny;
+      const out = Math.atan2(-e.ny, -e.nx);
+      if (sd.phase !== 'approach' && !g.c.world.coverAt(e.x + e.nx * 3, e.y + e.ny * 3)) {
+        // The panel went away and left it out in the open.
+        g.cover = null;
+        g.scare(e.x + e.nx * 20, e.y);
+        return { targetSpeed: 0 };
+      }
+      switch (sd.phase) {
+        case 'approach': {
+          const ox = e.x - e.nx * 8, oy = e.y - e.ny * 8;
+          g.targetAngle = Math.atan2(oy - head.y, ox - head.x);
+          const burstPhase = g.burstTimer % 80;
+          const targetSpeed = burstPhase < 15 ? 0.15 * S : burstPhase < 55 ? g.speed : 0.3 * S;
+          if (dist(head.x, head.y, ox, oy) < 6) { sd.phase = 'slip'; g.flick(); }
+          if (sd.timer > 900) { g.cover = null; return { targetSpeed, transition: STATE.EXPLORE }; }
+          return { targetSpeed };
+        }
+        case 'slip': {
+          g.targetAngle = Math.atan2(e.y + e.ny * e.depth - head.y, e.x + e.nx * e.depth - head.x);
+          const targetSpeed = g.hideFast ? g.speed * g.traits.resolve('fleeMultiplier') : g.speed * 0.8;
+          if (depth > e.depth - 4) {
+            sd.phase = 'under'; sd.timer = 0;
+            sd.wait = (120 + Math.random() * 240) * (g.hideFast ? 1.5 : 1) * (1 - g.needs.hungerFactor * 0.5);
+            g.hideFast = false;
+          }
+          return { targetSpeed };
+        }
+        case 'under':
+          if (sd.timer > sd.wait) { sd.phase = 'turn'; sd.timer = 0; }
+          return { targetSpeed: 0 };
+        case 'turn':
+          g.targetAngle = out;
+          if (Math.abs(angleDiff(g.angle, out)) < 0.25) { sd.phase = 'peek'; sd.timer = 0; }
+          return { targetSpeed: 0.3 * S };
+        case 'peek':
+          // Back to the edge at a walk, then creep the last bit until just the head is out.
+          g.targetAngle = out;
+          if (depth < -3) { sd.phase = 'look'; sd.timer = 0; sd.looks = 2 + Math.floor(Math.random() * 3); }
+          return { targetSpeed: depth > 8 ? g.speed * 0.7 : 0.3 * S };
+        default: {
+          // Just the head out: look about and taste the air.
+          if (sd.timer % 35 === 12) { g.headLook.look(); sd.looks--; }
+          if (sd.timer % 45 === 25) g.flick();
+          if (sd.timer % 50 === 40) g.blink();
+          if (sd.looks <= 0) {
+            if (Math.random() < 0.2 && !g.needs.canSleep()) { sd.phase = 'slip'; sd.timer = 0; return { targetSpeed: 0 }; }
+            g.cover = null;
+            g.hideCooldown = 2400 + Math.random() * 3000;
+            return { targetSpeed: 0, transition: STATE.EXPLORE };
+          }
+          return { targetSpeed: 0 };
+        }
+      }
+    },
+  },
 };
 
 // ═══════════════════════════════════════════════════════════════════
@@ -492,6 +575,11 @@ export class Personality {
   typing = false;
   userIdle = false;
   private petTimer = 0;
+  /** The panel it is heading under or hiding beneath. */
+  cover: CoverEntry | null = null;
+  hideFast = false;
+  /** Ticks until it will hide again of its own accord. */
+  hideCooldown = 0;
   private mouthTicks = 0;
 
   letter: NibbleTarget | null = null;
@@ -513,10 +601,27 @@ export class Personality {
       const b = c.world.bounds;
       this.destX = b.x + rand(40, 70);
       this.destY = c.body.head.y;
+      // It comes in from under the side panels and stops once it's out in the open.
+      for (let r = c.world.coverAt(this.destX, this.destY); r; r = c.world.coverAt(this.destX, this.destY)) this.destX = r.x + r.w + rand(12, 30);
     } else this.enterState(STATE.IDLE);
   }
 
   get body() { return this.c.body; }
+  /** The pointer, unless it's over a panel: then it's above the gecko and out of sight. */
+  get pointer() { const p = this.c.pointer; return p && !this.c.world.coverAt(p.x, p.y) ? p : null; }
+
+  /** Wary geckos like to get under things. */
+  wantsCover() {
+    if (this.hideCooldown > 0) return false;
+    if (Math.random() > 0.02 + 0.06 * (this.traits.traits.awareness ?? 0.5)) return false;
+    this.hideFast = false;
+    return this.findCover(150);
+  }
+
+  findCover(range: number, threat?: { x: number; y: number }) {
+    this.cover = this.c.world.coverEntry(this.head.x, this.head.y, range, threat);
+    return !!this.cover;
+  }
   get head() { return this.c.body.head; }
   distTo(x: number, y: number) { return dist(this.head.x, this.head.y, x, y); }
 
@@ -524,10 +629,19 @@ export class Personality {
   blink() { this.body.blink(); }
 
   enterState(state: State) {
+    // Coming to rest under a panel (after a dash, say) is hiding: it will peek out.
+    if ((state === STATE.IDLE || state === STATE.BASKING) && this.c.world.coverAt(this.head.x, this.head.y) && this.findCover(200)) {
+      state = STATE.HIDE;
+      this.hideFast = false;
+    }
     this.state = state;
     this.stateTimer = 0;
     this.stateData = {};
     StateHandlers[state].enter(this);
+    if (state === STATE.HIDE && this.c.world.coverAt(this.head.x, this.head.y) && this.stateData.phase === 'approach') {
+      this.stateData.phase = 'under';
+      this.stateData.wait = 60 + Math.random() * 120;
+    }
   }
 
   /** Home is a quiet corner: the inner bottom corner of a panel, or of the window. */
@@ -547,7 +661,7 @@ export class Personality {
     }
     const b = this.c.world.bounds;
     out.push({ x: b.x + 16, y: b.y + b.h - 16 }, { x: b.x + b.w - 16, y: b.y + b.h - 16 });
-    return out.filter((p) => this.c.world.inBounds(p.x, p.y, 8));
+    return out.filter((p) => this.c.world.inBounds(p.x, p.y, 8) && !this.c.world.coverAt(p.x, p.y));
   }
 
   nearestSeam(within: number) {
@@ -577,7 +691,11 @@ export class Personality {
     if (this.needs.wantsSleepSoon() || this.forcedNap) { set(this.homeX, this.homeY); return; }
     const f = this.needs.fullness;
     const homeUrge = f > 0.9 ? 0.95 : f > 0.5 ? (f - 0.5) * 0.6 : 0;
-    if (homeUrge > 0 && Math.random() < homeUrge) { set(this.homeX + (Math.random() - 0.5) * 22, this.homeY + (Math.random() - 0.5) * 22); return; }
+    if (homeUrge > 0 && Math.random() < homeUrge) {
+      const q = w.clampToBounds(this.homeX + (Math.random() - 0.5) * 22, this.homeY + (Math.random() - 0.5) * 22, 12);
+      if (w.coverAt(q.x, q.y)) set(this.homeX, this.homeY); else set(q.x, q.y);
+      return;
+    }
     // Destinations stay within a few body lengths: a workspace is far bigger, in lizard
     // terms, than the prototype's canvas was.
     const h = this.head;
@@ -603,12 +721,15 @@ export class Personality {
         x = h.x + Math.cos(a) * d; y = h.y + Math.sin(a) * d;
       }
       if (dist(h.x, h.y, x, y) > 190 || dist(h.x, h.y, x, y) < 12) continue;
+      // Stopping places are out in the open: not under a panel, not on the words.
+      ({ x, y } = w.clampToBounds(x, y, 12));
+      if (w.coverAt(x, y) || w.onText(x, y, 3)) continue;
       // Leave the place you're typing alone.
       if (this.typing && w.caret && dist(x, y, w.caret.x, w.caret.y) < 45) continue;
       set(x, y);
       return;
     }
-    set(b.x + b.w * Math.random(), b.y + b.h * Math.random());
+    set(this.homeX, this.homeY);
   }
 
   /** Something alarming at (x, y): a poke, a panel snapping open, typing right next to it. */
@@ -632,7 +753,7 @@ export class Personality {
   /** Shortest distance from (x, y) to the head and trunk. */
   bodyDistance(x: number, y: number) {
     let best = Infinity;
-    for (let i = 0; i <= 22; i += 2) best = Math.min(best, dist(this.body.pts[i].x, this.body.pts[i].y, x, y) - halfWidth(i));
+    for (let i = 0; i < TAIL_FIRST; i += 2) best = Math.min(best, dist(this.body.pts[i].x, this.body.pts[i].y, x, y) - halfWidth(i));
     return best;
   }
 
@@ -652,7 +773,7 @@ export class Personality {
   // ── Perception ────────────────────────────────────────────────
 
   private checkInterrupts(cursorDist: number) {
-    const st = this.state, p = this.c.pointer;
+    const st = this.state, p = this.pointer;
     if (p && st !== STATE.STARTLE && st !== STATE.FLEE && st !== STATE.HUNT) {
       if (this.cursorSpeed > this.traits.resolve('startleSpeed') * S && cursorDist < this.traits.resolve('startleDist') * S) { this.scareFrom(p); return; }
     }
@@ -713,7 +834,7 @@ export class Personality {
   }
 
   private updatePetting() {
-    const p = this.c.pointer, st = this.state;
+    const p = this.pointer, st = this.state;
     const calm = st === STATE.IDLE || st === STATE.BASKING || st === STATE.EXPLORE || st === STATE.SLEEP;
     const over = !!p && calm && this.cursorSpeed < 1.5 * S && this.bodyDistance(p.x, p.y) < 1.5;
     this.petTimer = over ? Math.min(40, this.petTimer + 1) : Math.max(0, this.petTimer - 2);
@@ -728,6 +849,8 @@ export class Personality {
     const c = this.c, px = c.world.px;
     for (const p of c.input.presses.splice(0)) {
       const x = p.x / px, y = p.y / px;
+      // A click on a panel lands on the panel, not on whatever is underneath.
+      if (c.world.coverAt(x, y)) continue;
       for (const bug of c.swarm.bugs) if (dist(bug.x, bug.y, x, y) < 6) bug.startle(x, y);
       if (this.bodyDistance(x, y) < 3) { this.scare(x, y); return; }
     }
@@ -777,16 +900,17 @@ export class Personality {
     const c = this.c, b = this.body;
     this.stateTimer++;
     this.burstTimer++;
+    if (this.hideCooldown > 0) this.hideCooldown--;
     this.typing = c.input.typedWithin(c.now, 3500);
     this.userIdle = c.input.idleFor(c.now) > c.opts.sleepAfterMs;
     if (this.entering && c.world.inBounds(this.head.x, this.head.y, 6)) this.entering = false;
-    if (!c.world.inBounds(this.homeX, this.homeY, 8)) this.chooseHome();
+    if (!c.world.inBounds(this.homeX, this.homeY, 8) || c.world.coverAt(this.homeX, this.homeY)) this.chooseHome();
 
     this.needs.update(this.state);
     this.color.update(this.state, this.petted);
     this.speed = (this.traits.resolve('baseSpeed') + this.traits.resolve('speedBoost')) * S;
 
-    const p = c.pointer;
+    const p = this.pointer;
     this.cursorSpeed = p && this.lastCursor ? dist(p.x, p.y, this.lastCursor.x, this.lastCursor.y) : 0;
     this.lastCursor = p ? { ...p } : null;
     const cursorDist = p ? this.distTo(p.x, p.y) : Infinity;
