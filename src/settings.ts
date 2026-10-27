@@ -1,5 +1,6 @@
 import { App, PluginSettingTab, Setting } from 'obsidian';
 import type ButterPetPlugin from './main';
+import type { Traits } from './engine/personality';
 
 export interface PetSettings {
   enabled: boolean;
@@ -13,6 +14,8 @@ export interface PetSettings {
   bugsFromTasks: boolean;
   sleepAfterMinutes: number;
   reducedMotion: 'system' | 'on' | 'off';
+  /** This gecko's personality, rolled on first run. Not shown in the UI. */
+  traits?: Traits;
 }
 
 export const DEFAULT_SETTINGS: PetSettings = {

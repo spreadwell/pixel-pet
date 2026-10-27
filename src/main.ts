@@ -1,5 +1,6 @@
 import { Editor, MarkdownFileInfo, MarkdownView, Platform, Plugin } from 'obsidian';
 import { PetEngine, PetOptions } from './engine/engine';
+import { rollTraits } from './engine/personality';
 import { ButterPetSettingTab, DEFAULT_SETTINGS, PetSettings } from './settings';
 
 const WORD = /[\p{L}\p{N}]+/gu;
@@ -34,6 +35,11 @@ export default class ButterPetPlugin extends Plugin {
 
   async loadSettings() {
     this.settings = { ...DEFAULT_SETTINGS, ...(await this.loadData()) };
+    // Every gecko gets its own personality the first time, and keeps it.
+    if (!this.settings.traits) {
+      this.settings.traits = rollTraits();
+      await this.saveData(this.settings);
+    }
   }
 
   async saveSettings() {
@@ -49,6 +55,7 @@ export default class ButterPetPlugin extends Plugin {
       px: s.size || (Platform.isPhone ? 2 : 3),
       maxFps: Platform.isMobile ? 30 : 0,
       color: s.colorMode === 'accent' ? 'var(--interactive-accent)' : s.customColor,
+      traits: s.traits,
       nibble: s.nibbleLetters,
       sleepAfterMs: s.sleepAfterMinutes * 60_000,
       reducedMotion: reduced,

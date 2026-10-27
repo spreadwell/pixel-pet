@@ -2,9 +2,11 @@
 
 A small pixel-art gecko that lives in your Obsidian workspace.
 
-It keeps to the seams between your panels the way real geckos keep to the cracks between stones. It moves in short bursts and then holds still to look around. It notices your pointer, darts away if you move at it too fast, and lets you pet it if you hover over it slowly. When you've been away for a while, it curls up and sleeps.
+Every gecko has its own personality. Some are quick and bold, others are wary, lazy or always hungry. It explores in short dashes, stops to look around and taste the air, basks in a favorite corner, and takes naps. It keeps to the seams between your panels the way real geckos keep to the cracks between stones.
 
-Writing brings it food. Every few dozen words a fly drifts in from the edge of the window, and finishing a task brings out a cricket. The gecko stalks them, freezes with its tail tip twitching, and strikes. It doesn't always catch them.
+Leave your pointer resting near it and it may stalk it. Move at it too fast and it freezes, then bolts. Hover over it slowly and it lets you pet it. When you've been away for a while, it heads home, curls up and sleeps.
+
+Writing brings it food. Every few dozen words a fly drifts in from the edge of the window, and finishing a task brings out a cricket. A hungry gecko spots prey from farther away and hunts harder; a full one would rather bask. It stalks, freezes with its tail twitching, and strikes. It doesn't always catch them.
 
 Now and then it tastes a word with its tongue and takes a bite out of a letter. **Only the display changes. Your note is never modified.** The letter grows back after a minute or so.
 

@@ -138,10 +138,11 @@ export class Bug {
     }
   }
 
-  draw(ctx: CanvasRenderingContext2D, pal: Palette, frame: number) {
-    const x = Math.floor(this.x), y = Math.floor(this.y);
+  /** Draw in grid cells: `k` converts world units to cells (ctx is scaled to cells). */
+  draw(ctx: CanvasRenderingContext2D, pal: Palette, frame: number, k = 1) {
+    const x = this.x, y = this.y;
     const fx = Math.cos(this.heading), fy = Math.sin(this.heading);
-    const px = (ax: number, ay: number, c: string) => { ctx.fillStyle = c; ctx.fillRect(Math.floor(ax), Math.floor(ay), 1, 1); };
+    const px = (ax: number, ay: number, c: string) => { ctx.fillStyle = c; ctx.fillRect(Math.floor(ax * k), Math.floor(ay * k), 1, 1); };
     const so = 1 + this.z * 0.7;
     ctx.globalAlpha = clamp(1 - this.z / 14, 0.35, 1);
     px(this.x + so, this.y + so, pal.shadow);
@@ -205,8 +206,8 @@ export class Swarm {
     this.bugs = this.bugs.filter((b) => b.alive);
   }
 
-  draw(ctx: CanvasRenderingContext2D, pal: Palette, frame: number) {
-    for (const b of this.bugs) b.draw(ctx, pal, frame);
+  draw(ctx: CanvasRenderingContext2D, pal: Palette, frame: number, k = 1) {
+    for (const b of this.bugs) b.draw(ctx, pal, frame, k);
   }
 
   nearest(x: number, y: number, maxDist: number): Bug | null {
@@ -242,11 +243,11 @@ export class Particles {
     this.ps = this.ps.filter((p) => p.life < p.max);
   }
 
-  draw(ctx: CanvasRenderingContext2D) {
+  draw(ctx: CanvasRenderingContext2D, k = 1) {
     for (const p of this.ps) {
       ctx.globalAlpha = clamp(1 - p.life / p.max, 0, 1) * (chance(0.97) ? 1 : 0.5);
       ctx.fillStyle = p.c;
-      ctx.fillRect(Math.floor(p.x), Math.floor(p.y), 1, 1);
+      ctx.fillRect(Math.floor(p.x * k), Math.floor(p.y * k), 1, 1);
     }
     ctx.globalAlpha = 1;
   }

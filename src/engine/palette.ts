@@ -48,19 +48,23 @@ const hsl = (h: number, s: number, l: number) =>
 
 const luminance = ([r, g, b]: Rgb) => (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
 
+
 /**
  * Build the gecko palette from a seed colour. Values are kept inside a band that
  * reads as a living animal (no neon, no near-black) whatever the accent is.
  */
-export function buildPalette(doc: Document, seedExpr: string): Palette {
+export function buildPalette(doc: Document, seedExpr: string, warmth = 0): Palette {
   const seed = resolveCssColor(doc, seedExpr) ?? [232, 184, 74];
   const bg = resolveCssColor(doc, 'var(--background-primary, #ffffff)') ?? [255, 255, 255];
   const ink = resolveCssColor(doc, 'var(--text-normal, #222222)') ?? [34, 34, 34];
   const dark = luminance(bg) < 0.45;
 
-  const [h, s0, l0] = rgbToHsl(seed);
-  const s = clamp(s0, 0.3, 0.78);
-  const l = clamp(l0, 0.45, 0.62);
+  const [h0, s0, l0] = rgbToHsl(seed);
+  // A basking gecko warms up: a touch brighter, nudged toward yellow.
+  const toYellow = ((((48 - h0) % 360) + 540) % 360) - 180;
+  const h = h0 + clamp(toYellow, -10, 10) * warmth;
+  const s = clamp(s0, 0.3, 0.78) + 0.05 * warmth;
+  const l = clamp(l0, 0.45, 0.62) + 0.05 * warmth;
 
   return {
     outline: hsl(h - 6, s * 0.9, l * 0.38),

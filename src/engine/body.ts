@@ -173,6 +173,8 @@ export class Body {
     return { x: dx / l, y: dy / l };
   }
 
+  blink() { if (this.blinkT < 0) this.blinkT = 0; }
+
   flickTongue(kind: TongueKind = 'flick') {
     if (this.tongue) return;
     this.tongue = { kind, t: 0, side: Math.random() < 0.5 ? 1 : -1 };
