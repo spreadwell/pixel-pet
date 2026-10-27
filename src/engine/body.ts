@@ -73,13 +73,13 @@ interface LegDef {
 // of its trunk length per cycle — so each foot sweeps visibly from ahead of its girdle
 // to well behind it.
 const LEGS: LegDef[] = [
-  { seg: SHOULDER, side: -1, front: true, l1: 2.6, l2: 2.6, restFwd: 1.0, restOut: 2.8, phase: 0 },
-  { seg: SHOULDER, side: 1, front: true, l1: 2.6, l2: 2.6, restFwd: 1.0, restOut: 2.8, phase: 0.5 },
-  { seg: HIP, side: -1, front: false, l1: 2.8, l2: 2.8, restFwd: -1.5, restOut: 2.7, phase: 0.5 },
-  { seg: HIP, side: 1, front: false, l1: 2.8, l2: 2.8, restFwd: -1.5, restOut: 2.7, phase: 0 },
+  { seg: SHOULDER, side: -1, front: true, l1: 2.6, l2: 2.9, restFwd: 1.8, restOut: 2.4, phase: 0 },
+  { seg: SHOULDER, side: 1, front: true, l1: 2.6, l2: 2.9, restFwd: 1.8, restOut: 2.4, phase: 0.5 },
+  { seg: HIP, side: -1, front: false, l1: 2.8, l2: 3.2, restFwd: -1.9, restOut: 2.6, phase: 0.5 },
+  { seg: HIP, side: 1, front: false, l1: 2.8, l2: 3.2, restFwd: -1.9, restOut: 2.6, phase: 0 },
 ];
-const STRIDE_MIN = 6.5;
-const STRIDE_MAX = 8.5;
+const STRIDE_MIN = 6;
+const STRIDE_MAX = 8;
 /** A limb stretched past this fraction of its length looks locked straight. */
 const COMFORT = 0.9;
 const MAX_STEP_HZ = 8;
@@ -103,8 +103,6 @@ export class Leg {
   dur = 0.1;
   from: Pt = { x: 0, y: 0 };
   private cycle = 0;
-  /** The knee has been placed at least once, so it can be kept continuous. */
-  kneeSet = false;
   /** 0..1 height of a lifted foot, for shadows. */
   lift = 0;
 
@@ -576,46 +574,34 @@ export class Body {
   private underfoot(leg: Leg, hip: Pt) {
     const f = this.forward(leg.def.seg);
     const dx = leg.foot.x - hip.x, dy = leg.foot.y - hip.y;
-    return (dx * -f.y + dy * f.x) * leg.def.side < 0.8 || Math.hypot(dx, dy) < 0.32 * (leg.def.l1 + leg.def.l2);
+    return (dx * -f.y + dy * f.x) * leg.def.side < 0.4 || Math.hypot(dx, dy) < 0.22 * (leg.def.l1 + leg.def.l2);
   }
 
+  /**
+   * Where the elbow or knee is, seen from above. A sprawling lizard's upper limb points
+   * out toward its foot and the bend at the joint is mostly vertical — the lower limb
+   * drops to the ground — so from above the limb is nearly a straight line from hip to
+   * foot that sweeps fore and aft as the body passes over it, with a small kink: the arm
+   * goes out then forward to the hand, the hind leg out then back to the foot. It never
+   * folds out sideways, and it moves continuously with the foot.
+   */
   private solveKnee(leg: Leg, hip: Pt): Pt {
-    const { seg, side, front, l1, l2 } = leg.def;
+    const { seg, side, front, l1 } = leg.def;
     const f = this.forward(seg);
     const ox = -f.y * side, oy = f.x * side;
-    // A sprawling lizard's elbows and knees always point out from the body: elbows a
-    // little back, knees a little forward, and fully out at mid-swing.
+    const dx = leg.foot.x - hip.x, dy = leg.foot.y - hip.y;
+    const d = Math.hypot(dx, dy);
+    if (d < 0.05) return { x: hip.x + ox * 0.6, y: hip.y + oy * 0.6 };
+    // Kink the upper limb toward the side (out) and away from the foot's fore-aft lean,
+    // more so mid-swing when the limb is drawn up.
     const swing = leg.swinging ? Math.sin(leg.t * Math.PI) : 0;
-    let hx: number, hy: number;
-    if (front) {
-      const back = 0.3 * (1 - swing);
-      hx = ox * (1 - back) - f.x * back; hy = oy * (1 - back) - f.y * back;
-    } else {
-      const fwd = 0.2 * (1 - swing);
-      hx = ox * (1 - fwd) + f.x * fwd; hy = oy * (1 - fwd) + f.y * fwd;
-    }
-    const fx = leg.foot.x, fy = leg.foot.y;
-    const d = Math.min(Math.hypot(fx - hip.x, fy - hip.y), l1 + l2 - 0.01);
-    if (d < 0.01) return { x: hip.x + hx * l1, y: hip.y + hy * l1 };
-    const base = Math.atan2(fy - hip.y, fx - hip.x);
-    const cosB = clamp((l1 * l1 + d * d - l2 * l2) / (2 * l1 * d), -1, 1);
-    const b = Math.acos(cosB);
-    const k1 = { x: hip.x + l1 * Math.cos(base + b), y: hip.y + l1 * Math.sin(base + b) };
-    const k2 = { x: hip.x + l1 * Math.cos(base - b), y: hip.y + l1 * Math.sin(base - b) };
-    // Never bent in toward the body; otherwise the joint stays nearest where it just was,
-    // so it can't pop across to its mirror position as the body passes over the foot.
-    const out1 = (k1.x - hip.x) * ox + (k1.y - hip.y) * oy, out2 = (k2.x - hip.x) * ox + (k2.y - hip.y) * oy;
-    const inward = -0.6 * l1;
-    if (out1 < inward !== out2 < inward) return out1 > out2 ? k1 : k2;
-    const pk = leg.knee;
-    if (leg.kneeSet) {
-      const n1 = Math.hypot(k1.x - pk.x, k1.y - pk.y), n2 = Math.hypot(k2.x - pk.x, k2.y - pk.y);
-      if (Math.abs(n1 - n2) > 0.05) return n1 < n2 ? k1 : k2;
-    }
-    leg.kneeSet = true;
-    const d1 = (k1.x - hip.x) * hx + (k1.y - hip.y) * hy;
-    const d2 = (k2.x - hip.x) * hx + (k2.y - hip.y) * hy;
-    return d1 >= d2 ? k1 : k2;
+    const k = 0.5 + 0.25 * swing;
+    const fa = front ? -1 : 1;
+    let ux = dx / d + (ox * 0.5 + f.x * fa * 0.5) * k, uy = dy / d + (oy * 0.5 + f.y * fa * 0.5) * k;
+    const ul = Math.hypot(ux, uy) || 1;
+    ux /= ul; uy /= ul;
+    const len = Math.min(l1, d * 0.72);
+    return { x: hip.x + ux * len, y: hip.y + uy * len };
   }
 
   breathScale(i: number): number {
