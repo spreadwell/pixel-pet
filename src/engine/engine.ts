@@ -6,6 +6,7 @@ import { clamp, rand } from './math';
 import { Nibbler } from './nibble';
 import { Palette, buildPalette } from './palette';
 import { BrainOptions, Ctx, Personality, STATE } from './personality';
+import { Reactions } from './reactions';
 import { GeckoRenderer } from './render';
 import { World } from './world';
 
@@ -29,6 +30,7 @@ export class PetEngine {
   private world: World;
   private input: InputTracker;
   private grabber: Grabber;
+  private reactions: Reactions;
   private swarm = new Swarm();
   private particles = new Particles();
   private nibbler: Nibbler;
@@ -46,7 +48,7 @@ export class PetEngine {
   private scanIn = 0;
   private caretIn = 0;
   private maintainIn = 0;
-  private onResize = () => { this.resize(); this.world.scan(); };
+  private onResize = () => { this.resize(); this.reactions.resize(); this.world.scan(); };
   private onVisibility = () => { this.last = performance.now(); };
 
   constructor(private win: Window, private opts: PetOptions) {
@@ -61,8 +63,9 @@ export class PetEngine {
       hit: (x, y) => this.hitsPet(x, y),
       start: (x, y) => { this.body.grab(x / this.opts.px, y / this.opts.px); this.brain.pickUp(); },
       move: (x, y) => this.body.holdAt(x / this.opts.px, y / this.opts.px),
-      end: () => { this.body.release(); this.brain.putDown(); },
+      end: () => { this.splash(); this.body.release(); this.brain.putDown(); },
     });
+    this.reactions = new Reactions(win);
     this.nibbler = new Nibbler(win);
     this.buildPalettes();
   }
@@ -70,6 +73,7 @@ export class PetEngine {
   /** Start, optionally placing the gecko at a CSS position instead of walking in. */
   start(at?: { x: number; y: number; heading: number }) {
     const doc = this.win.document;
+    this.reactions.attach();
     doc.body.appendChild(this.canvas);
     this.world.px = this.opts.px;
     this.resize();
@@ -103,6 +107,7 @@ export class PetEngine {
     this.win.visualViewport?.removeEventListener('resize', this.onResize);
     this.win.document.removeEventListener('visibilitychange', this.onVisibility);
     this.nibbler.destroy();
+    this.reactions.destroy();
     this.canvas.remove();
   }
 
@@ -140,6 +145,32 @@ export class PetEngine {
     const p = this.input.pointer;
     const b = this.world.bounds;
     this.brain.summon(p ? { x: p.x / this.opts.px, y: p.y / this.opts.px } : { x: b.x + b.w / 2, y: b.y + b.h / 2 });
+  }
+
+  /**
+   * Footfalls make the workspace react: letters dip under its feet, tabs and file names
+   * jiggle. Not while it is under a panel, nor right where you are typing.
+   */
+  private react() {
+    const b = this.body, px = this.opts.px;
+    if (b.under || this.opts.reducedMotion) { b.footfalls.length = 0; return; }
+    const k = this.world.caret, typing = this.input.typedWithin(performance.now(), 2000);
+    for (const f of b.footfalls) {
+      if (typing && k && Math.hypot(f.x - k.x, f.y - k.y) < 25) continue;
+      // Hauling itself up onto something, or running, it lands harder.
+      const climbing = this.world.groundAt(f.x, f.y) > b.z[f.leg.def.seg] + 1.5;
+      const strength = climbing ? 1.5 : b.speed > 50 ? 1.3 : 1;
+      this.reactions.step(f.x * px, f.y * px, Math.cos(b.heading), Math.sin(b.heading), strength);
+    }
+    b.footfalls.length = 0;
+  }
+
+  /** Dropped from a height: everything under it bounces. */
+  private splash() {
+    const b = this.body, px = this.opts.px;
+    if (this.opts.reducedMotion) return;
+    const pts = [...[4, 8, 11, 14, 17, 20].map((i) => b.pts[i]), ...b.legs.map((l) => l.foot)];
+    this.reactions.splash(pts.map((p) => ({ x: p.x * px, y: p.y * px })), b.pts[12].x * px, b.pts[12].y * px);
   }
 
   /** Is the CSS point (x, y) on the pet — and not on a panel it is hiding under? */
@@ -217,6 +248,8 @@ export class PetEngine {
 
     this.swarm.update(TICK, this.world, this.body.head);
     this.particles.update(TICK);
+    this.react();
+    this.reactions.update(TICK);
   }
 
   private render() {
@@ -235,6 +268,7 @@ export class PetEngine {
       g.clip('evenodd');
     }
     this.renderer.draw(g, this.body, pal);
+    this.reactions.draw();
     if (covers.length) g.restore();
     for (const b of this.swarm.bugs) if (b.z >= 1) b.draw(g, pal, this.frame);
     this.particles.draw(g);

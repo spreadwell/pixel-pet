@@ -24,3 +24,16 @@ body.pixel-pet-holding,
 body.pixel-pet-holding * {
   cursor: grabbing !important;
 }
+
+/* Letters dipping under the pet's feet are drawn on this layer, just below the pet,
+   while the real letter is briefly painted transparent. */
+.pixel-pet-letters {
+  position: fixed;
+  left: 0;
+  top: 0;
+  pointer-events: none;
+  z-index: calc(var(--layer-popover, 30) - 2);
+}
+::highlight(pixel-pet-jostle) {
+  color: transparent;
+}

@@ -4,6 +4,7 @@ import type { InputTracker } from './input';
 import { angleDiff, clamp, lerp, rand } from './math';
 import type { NibbleTarget, Nibbler } from './nibble';
 import type { Palette } from './palette';
+import { Waypoint, findRoute } from './route';
 import type { CoverEntry, World } from './world';
 
 // ═══════════════════════════════════════════════════════════════════
@@ -29,6 +30,8 @@ import type { CoverEntry, World } from './world';
 //     climbing). Side panels are also cover: it slips under one, waits and peeks back
 //     out, and bolts for one when frightened. While it is under a panel, a pointer or
 //     click on that panel is above it and unseen.
+//   - New: it finds its way over that terrain (route.ts) instead of beelining: along the
+//     margins and the gaps between paragraphs, around headings, climbing when it pays.
 //
 // Sections: TRAIT SYSTEM · NEEDS · SUB-BEHAVIOURS · STATE HANDLERS · PERSONALITY
 // Distances are multiples of S (the original's body scale, here in art px) and times
@@ -298,7 +301,8 @@ const StateHandlers: Record<State, Handler> = {
         if (sd.wallFollowTimer % 30 === 0) g.flick();
         if (sd.wallFollowTimer <= 0 || d < 15 * S) sd.wallFollowing = false;
       } else if (!sd.investigating) {
-        g.targetAngle = Math.atan2(g.destY - head.y, g.destX - head.x);
+        const wp = g.waypoint(g.destX, g.destY);
+        g.targetAngle = Math.atan2(wp.y - head.y, wp.x - head.x);
         // The explore rhythm: hesitate, dash, slow — over and over.
         const burstPhase = g.burstTimer % 80;
         if (burstPhase < 15) targetSpeed = 0.15 * S;
@@ -433,7 +437,10 @@ const StateHandlers: Record<State, Handler> = {
   },
 
   [STATE.NIBBLE]: {
-    enter(g) { g.stateData = { phase: 'approach', timer: 0, flicks: 0 }; },
+    enter(g) {
+      g.stateData = { phase: 'approach', timer: 0, flicks: 0 };
+      if (g.letterAt) g.planRoute(g.letterAt.x, g.letterAt.y);
+    },
     update(g) {
       const sd = g.stateData, head = g.head;
       const at = g.letterAt;
@@ -442,7 +449,8 @@ const StateHandlers: Record<State, Handler> = {
       const toLetter = Math.atan2(at.y - head.y, at.x - head.x);
       sd.timer++;
       if (sd.phase === 'approach') {
-        g.targetAngle = toLetter;
+        const wp = g.waypoint(at.x, at.y);
+        g.targetAngle = d < 20 * S ? toLetter : Math.atan2(wp.y - head.y, wp.x - head.x);
         const burstPhase = g.burstTimer % 80;
         let targetSpeed = burstPhase < 15 ? 0.15 * S : burstPhase < 55 ? g.speed * 0.8 : 0.3 * S;
         if (d < 20 * S) targetSpeed = Math.min(targetSpeed, 0.3 * S);
@@ -477,7 +485,10 @@ const StateHandlers: Record<State, Handler> = {
   // Under a side panel: approach its edge, slip under, wait, turn round, peek out and
   // look about, then come out — or think better of it and go back under.
   [STATE.HIDE]: {
-    enter(g) { g.stateData = { phase: g.hideFast ? 'slip' : 'approach', timer: 0, wait: 0, looks: 0 }; },
+    enter(g) {
+      g.stateData = { phase: g.hideFast ? 'slip' : 'approach', timer: 0, wait: 0, looks: 0 };
+      if (g.cover && !g.hideFast) g.planRoute(g.cover.x - g.cover.nx * 8, g.cover.y - g.cover.ny * 8);
+    },
     update(g) {
       const sd = g.stateData, e = g.cover, head = g.head;
       if (!e) return { targetSpeed: 0.05 * S, transition: STATE.IDLE };
@@ -494,7 +505,8 @@ const StateHandlers: Record<State, Handler> = {
       switch (sd.phase) {
         case 'approach': {
           const ox = e.x - e.nx * 8, oy = e.y - e.ny * 8;
-          g.targetAngle = Math.atan2(oy - head.y, ox - head.x);
+          const wp = g.waypoint(ox, oy);
+          g.targetAngle = Math.atan2(wp.y - head.y, wp.x - head.x);
           const burstPhase = g.burstTimer % 80;
           const targetSpeed = burstPhase < 15 ? 0.15 * S : burstPhase < 55 ? g.speed : 0.3 * S;
           if (dist(head.x, head.y, ox, oy) < 6) { sd.phase = 'slip'; g.flick(); }
@@ -587,6 +599,9 @@ export class Personality {
   /** The panel it is heading under or hiding beneath. */
   cover: CoverEntry | null = null;
   hideFast = false;
+  private route: Waypoint[] | null = null;
+  private routeAt = 0;
+  private routeTo: { x: number; y: number } | null = null;
   /** Ticks until it will hide again of its own accord. */
   hideCooldown = 0;
   private mouthTicks = 0;
@@ -699,7 +714,36 @@ export class Personality {
     else if (h.y > b.y + b.h - margin && ok(this.destY > b.y + b.h - m)) this.targetAngle = lerpAngle(this.targetAngle, -Math.PI / 2, rate);
   }
 
+  /** Pick somewhere to go and work out how to get there. */
   pickDestination() {
+    this.chooseDestination();
+    this.planRoute(this.destX, this.destY);
+  }
+
+  /** Plan a way over the terrain to (x, y). */
+  planRoute(x: number, y: number) {
+    this.route = findRoute(this.c.world, this.head.x, this.head.y, x, y);
+    this.routeAt = 0;
+    this.routeTo = { x, y };
+  }
+
+  /**
+   * Where to steer now on the way to (x, y): the next waypoint of the planned route.
+   * Every few seconds, or if it has been pushed off course, it looks again: the note
+   * scrolls and panels move.
+   */
+  waypoint(x: number, y: number): Waypoint {
+    const h = this.head, to = this.routeTo;
+    if (!this.route || !to || dist(to.x, to.y, x, y) > 4 || this.burstTimer % 180 === 0) this.planRoute(x, y);
+    const r = this.route;
+    if (!r || !r.length) return { x, y };
+    while (this.routeAt < r.length - 1 && dist(h.x, h.y, r[this.routeAt].x, r[this.routeAt].y) < 6) this.routeAt++;
+    const wp = r[this.routeAt];
+    if (dist(h.x, h.y, wp.x, wp.y) > 40) { this.planRoute(x, y); return this.route?.[0] ?? { x, y }; }
+    return wp;
+  }
+
+  private chooseDestination() {
     const w = this.c.world, b = w.bounds;
     const set = (x: number, y: number) => { const q = w.clampToBounds(x, y, 12); this.destX = q.x; this.destY = q.y; };
     if (this.needs.wantsSleepSoon() || this.forcedNap) { set(this.homeX, this.homeY); return; }

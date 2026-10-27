@@ -9,23 +9,42 @@ import type { Palette } from './palette';
  * the silhouette changes pixel-by-pixel as the animal moves instead of jumping as a
  * whole. Each covered pixel remembers which side of the spine it lies on.
  *
- * Height shows through the shadow: each pixel casts its shadow down and to the right by
- * how far it is above the ground beneath it, so where the body bridges a step its
- * shadow falls away, and a lifted foot's shadow parts from it.
+ * Height shows three ways, as it would to a camera looking down:
+ *   - Size. Whatever is higher is nearer the camera and drawn bigger, point by point,
+ *     so up on a sidebar the whole gecko is larger, rearing up a ledge its front half
+ *     swells before its back, and held in the hand it looms.
+ *   - Shadow. The shadow stays on the ground at the animal's true size and falls down
+ *     and to the right by how high each part is, landing wherever the ground actually is
+ *     — so from the top of a ledge it drops off the edge.
+ *   - Light. Where the spine crests over a ridge or lip it catches the light; in the
+ *     dip below one it falls into shade.
  */
 
 interface LegPixel { x: number; y: number; c: string; lift: number; z: number; }
+type Project = (x: number, y: number, z: number) => { x: number; y: number };
+
+/** How much bigger something is drawn per art px of height. */
+const NEARER = 0.025;
 
 /** Shadow offset (art px) for a pixel `h` above the ground. */
 const shadowOffset = (h: number) => 1 + Math.round(Math.min(8, Math.max(0, h * 0.9)));
 
-/**
- * Where the shadow of a pixel at height `z` lands: measured against the ground where it
- * falls, not under the pixel, so from the top of a ledge the shadow drops off the edge.
- */
+/** Where the shadow of a point at height `z` lands, measured against the ground where it falls. */
 function castShadow(b: Body, z: number, x: number, y: number) {
   const o = shadowOffset(z - b.ground(x + 0.5, y + 0.5));
   return shadowOffset(z - b.ground(x + o + 0.5, y + o + 0.5));
+}
+
+/** Visit every pixel of a disc. */
+function disc(cx: number, cy: number, r: number, fn: (x: number, y: number, dx: number, dy: number, d2: number) => void) {
+  const r2 = r * r;
+  for (let y = Math.floor(cy - r); y <= Math.ceil(cy + r); y++) {
+    const dy = y + 0.5 - cy;
+    for (let x = Math.floor(cx - r); x <= Math.ceil(cx + r); x++) {
+      const dx = x + 0.5 - cx, d2 = dx * dx + dy * dy;
+      if (d2 <= r2) fn(x, y, dx, dy, d2);
+    }
+  }
 }
 
 // Light falls from the upper left of the screen, whichever way the animal faces.
@@ -51,12 +70,21 @@ export class GeckoRenderer {
     if (toLight > 0.25) this.lit = 1;
     else if (toLight < -0.25) this.lit = -1;
 
-    this.rasteriseBody(b);
-    const legs = this.legPixels(b, pal);
+    // Nearer the camera, drawn bigger: points spread out from the middle of the body.
+    const c = b.pts[12];
+    const project: Project = (x, y, z) => {
+      const s = 1 + NEARER * Math.max(0, z);
+      return { x: c.x + (x - c.x) * s, y: c.y + (y - c.y) * s };
+    };
+    const flat: Project = (x, y) => ({ x, y });
 
-    // Shadow first (deduplicated so overlaps don't darken).
+    this.frame(b, project);
+    this.rasteriseBody(b, project);
+    const legs = this.legPixels(b, pal, project);
+
+    // The shadow: the body at its true size on the ground, each part offset by its height.
     const { bw, bh, bx, by } = this;
-    const sw = bw + 10, sh = bh + 10;
+    const sw = bw, sh = bh;
     if (this.shadow.length < sw * sh) this.shadow = new Uint8Array(sw * sh);
     const shadow = this.shadow;
     shadow.fill(0, 0, sw * sh);
@@ -64,39 +92,49 @@ export class GeckoRenderer {
       const sx = x - bx, sy = y - by;
       if (sx >= 0 && sy >= 0 && sx < sw && sy < sh) shadow[sy * sw + sx] = 1;
     };
-    for (let y = 0; y < bh; y++) for (let x = 0; x < bw; x++) {
-      const k = y * bw + x;
-      if (this.depth[k] <= 0) continue;
-      const o = castShadow(b, b.z[this.seg[k]], bx + x, by + y);
-      mark(bx + x + o, by + y + o);
+    for (let i = 0; i < SPINE; i++) {
+      const p = this.spinePoint(b, i);
+      const o = castShadow(b, b.z[i], p.x, p.y);
+      disc(p.x + o, p.y + o, halfWidth(i) * b.breathScale(i) * b.squeeze[i], (x, y) => mark(x, y));
     }
-    for (const p of legs) {
+    for (const p of this.legPixels(b, pal, flat)) {
       const o = castShadow(b, p.z, p.x, p.y);
       mark(p.x + o, p.y + o);
     }
     ctx.fillStyle = pal.shadow;
     for (let y = 0; y < sh; y++) for (let x = 0; x < sw; x++) {
-      if (shadow[y * sw + x] && !(x < bw && y < bh && this.depth[y * bw + x] > 0)) {
-        ctx.fillRect(bx + x, by + y, 1, 1);
-      }
+      if (shadow[y * sw + x] && !(this.depth[y * bw + x] > 0)) ctx.fillRect(bx + x, by + y, 1, 1);
     }
 
     for (const p of legs) { ctx.fillStyle = p.c; ctx.fillRect(p.x, p.y, 1, 1); }
     this.paintBody(ctx, b, pal);
-    this.paintHead(ctx, b, pal);
+    this.paintHead(ctx, b, pal, project);
   }
 
-  private rasteriseBody(b: Body) {
+  /** A spine point with the tail twitch applied (before any projection). */
+  private spinePoint(b: Body, i: number) {
+    const p = b.pts[i], f = b.forward(i), tw = b.tailOffset(i);
+    return { x: p.x - f.y * tw, y: p.y + f.x * tw };
+  }
+
+  /** Size the work area to cover the drawn body, its feet and its shadow. */
+  private frame(b: Body, project: Project) {
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    for (const p of b.pts) {
-      if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
-      if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y;
+    const take = (x: number, y: number) => {
+      if (x < minX) minX = x; if (x > maxX) maxX = x;
+      if (y < minY) minY = y; if (y > maxY) maxY = y;
+    };
+    for (let i = 0; i < SPINE; i++) {
+      const p = b.pts[i];
+      take(p.x, p.y);
+      const q = project(p.x, p.y, b.z[i]);
+      take(q.x, q.y);
     }
-    const pad = 6;
+    const pad = 10;
     this.bx = Math.floor(minX) - pad;
     this.by = Math.floor(minY) - pad;
-    this.bw = Math.ceil(maxX) + pad - this.bx;
-    this.bh = Math.ceil(maxY) + pad - this.by;
+    this.bw = Math.ceil(maxX) + pad + 10 - this.bx;
+    this.bh = Math.ceil(maxY) + pad + 10 - this.by;
     const size = this.bw * this.bh;
     if (this.depth.length < size) {
       this.depth = new Float32Array(size);
@@ -104,36 +142,27 @@ export class GeckoRenderer {
       this.lat = new Float32Array(size);
     }
     this.depth.fill(0, 0, size);
+  }
 
+  private rasteriseBody(b: Body, project: Project) {
     for (let i = SPINE - 1; i >= 0; i--) {
-      const p = b.pts[i];
+      const sp = this.spinePoint(b, i);
       const f = b.forward(i);
-      const tw = b.tailOffset(i);
-      const cx = p.x - f.y * tw, cy = p.y + f.x * tw;
-      const r = halfWidth(i) * b.breathScale(i) * b.squeeze[i];
-      const r2 = r * r;
-      const x0 = Math.floor(cx - r), x1 = Math.ceil(cx + r);
-      const y0 = Math.floor(cy - r), y1 = Math.ceil(cy + r);
-      for (let y = y0; y <= y1; y++) {
-        const ly = y - this.by;
-        if (ly < 0 || ly >= this.bh) continue;
-        const dy = y + 0.5 - cy;
-        for (let x = x0; x <= x1; x++) {
-          const lx = x - this.bx;
-          if (lx < 0 || lx >= this.bw) continue;
-          const dx = x + 0.5 - cx;
-          const d2 = dx * dx + dy * dy;
-          if (d2 > r2) continue;
-          const depth = 1 - Math.sqrt(d2) / (r + 0.001);
-          const k = ly * this.bw + lx;
-          if (depth > this.depth[k]) {
-            this.depth[k] = depth;
-            this.seg[k] = i;
-            // Signed lateral offset: + is the animal's left.
-            this.lat[k] = (f.x * dy - f.y * dx) / (r + 0.001);
-          }
+      const z = b.z[i];
+      const { x: cx, y: cy } = project(sp.x, sp.y, z);
+      const r = halfWidth(i) * b.breathScale(i) * b.squeeze[i] * (1 + NEARER * Math.max(0, z));
+      disc(cx, cy, r, (x, y, dx, dy, d2) => {
+        const lx = x - this.bx, ly = y - this.by;
+        if (lx < 0 || ly < 0 || lx >= this.bw || ly >= this.bh) return;
+        const depth = 1 - Math.sqrt(d2) / (r + 0.001);
+        const k = ly * this.bw + lx;
+        if (depth > this.depth[k]) {
+          this.depth[k] = depth;
+          this.seg[k] = i;
+          // Signed lateral offset: + is the animal's left.
+          this.lat[k] = (f.x * dy - f.y * dx) / (r + 0.001);
         }
-      }
+      });
     }
   }
 
@@ -155,15 +184,17 @@ export class GeckoRenderer {
     }
   }
 
-  private paintHead(ctx: CanvasRenderingContext2D, b: Body, pal: Palette) {
+  private paintHead(ctx: CanvasRenderingContext2D, b: Body, pal: Palette, project: Project) {
     const a = b.headAngle;
     const fx = Math.cos(a), fy = Math.sin(a);
     const lx = fy, ly = -fx; // animal's left
     const at = (k: number, side: number) => {
       const p = b.pts[k];
-      return { x: Math.floor(p.x + lx * side), y: Math.floor(p.y + ly * side) };
+      const q = project(p.x + lx * side, p.y + ly * side, b.z[k]);
+      return { x: Math.floor(q.x), y: Math.floor(q.y) };
     };
     const px = (p: { x: number; y: number }, c: string) => { ctx.fillStyle = c; ctx.fillRect(p.x, p.y, 1, 1); };
+    const s0 = 1 + NEARER * Math.max(0, b.z[0]);
 
     // One dark pixel per eye, on the sides of the skull; closed, it reads as shade.
     for (const side of [1, -1]) {
@@ -171,22 +202,22 @@ export class GeckoRenderer {
     }
 
     // Mouth: when open, the snout tip splits.
-    const tip = { x: b.pts[0].x + fx * 0.9, y: b.pts[0].y + fy * 0.9 };
+    const tip = project(b.pts[0].x + fx * 0.9, b.pts[0].y + fy * 0.9, b.z[0]);
     if (b.mouth > 0.35) {
       px({ x: Math.floor(tip.x), y: Math.floor(tip.y) }, pal.tongue);
-      px({ x: Math.floor(tip.x + lx * 1.1), y: Math.floor(tip.y + ly * 1.1) }, pal.shade);
-      px({ x: Math.floor(tip.x - lx * 1.1), y: Math.floor(tip.y - ly * 1.1) }, pal.shade);
+      px({ x: Math.floor(tip.x + lx * 1.1 * s0), y: Math.floor(tip.y + ly * 1.1 * s0) }, pal.shade);
+      px({ x: Math.floor(tip.x - lx * 1.1 * s0), y: Math.floor(tip.y - ly * 1.1 * s0) }, pal.shade);
     }
 
     const t = b.tongue;
     if (t) {
       const ext = Math.sin(t.t * Math.PI);
       if (t.kind === 'flick') {
-        const len = 1 + ext * 2.4;
+        const len = (1 + ext * 2.4) * s0;
         for (let s = 0.6; s <= len; s += 0.6) px({ x: Math.floor(tip.x + fx * s), y: Math.floor(tip.y + fy * s) }, pal.tongue);
       } else {
         // Eye lick: the tongue sweeps from the snout up over one eye.
-        const eye = { x: b.pts[3].x + lx * t.side * halfWidth(3), y: b.pts[3].y + ly * t.side * halfWidth(3) };
+        const eye = project(b.pts[3].x + lx * t.side * halfWidth(3), b.pts[3].y + ly * t.side * halfWidth(3), b.z[3]);
         const u = ext;
         const mx = tip.x + (eye.x - tip.x) * u + fx * 1.2 * Math.sin(u * Math.PI);
         const my = tip.y + (eye.y - tip.y) * u + fy * 1.2 * Math.sin(u * Math.PI);
@@ -197,14 +228,13 @@ export class GeckoRenderer {
     }
   }
 
-  private legPixels(b: Body, pal: Palette): LegPixel[] {
+  private legPixels(b: Body, pal: Palette, project: Project): LegPixel[] {
     const out: LegPixel[] = [];
-    for (const leg of b.legs) this.legToPixels(b, leg, pal, out);
+    for (const leg of b.legs) this.legToPixels(b, leg, pal, out, project);
     return out;
   }
 
-  private legToPixels(b: Body, leg: Leg, pal: Palette, out: LegPixel[]) {
-    const { hip, knee, foot } = leg;
+  private legToPixels(b: Body, leg: Leg, pal: Palette, out: LegPixel[], project: Project) {
     const lift = leg.lift;
     const f = b.forward(leg.def.seg);
     const side = leg.def.side;
@@ -213,6 +243,7 @@ export class GeckoRenderer {
     const seen = new Set<number>();
     // Heights: the hip rides with the body, the foot stands on the terrain (or lifts off it).
     const zh = b.z[leg.def.seg], zf = b.footZ(leg), zk = (zh + zf) / 2;
+    const hip = project(leg.hip.x, leg.hip.y, zh), knee = project(leg.knee.x, leg.knee.y, zk), foot = project(leg.foot.x, leg.foot.y, zf);
     const put = (x: number, y: number, l: number, z: number) => {
       const ix = Math.floor(x), iy = Math.floor(y);
       const key = iy * 100003 + ix;

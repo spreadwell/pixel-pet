@@ -188,6 +188,8 @@ export class Body {
   ground: (x: number, y: number) => number = () => 0;
   /** Crawling under a panel rather than over the terrain. */
   under = false;
+  /** Feet that came down this tick (the engine drains these to make things react). */
+  footfalls: { x: number; y: number; leg: Leg }[] = [];
   /** Speed factor from the slope ahead: below 1 climbing up, a little below going down. */
   private climb = 1;
   /** A pause at the foot of a ledge before scrambling up it; re-armed once clear of it. */
@@ -195,6 +197,9 @@ export class Body {
   private ledgeArmed = true;
   /** Pausing at the top of a drop, looking over. */
   private peering = false;
+  /** Rearing up at the foot of a step, head and shoulders lifted toward the top (art px). */
+  private rear = 0;
+  private rearTarget = 0;
   /** Picked up by the user: which spine point is gripped, and where it is being held. */
   private held: { i: number; x: number; y: number } | null = null;
   private zDrape: number[] = new Array(SPINE).fill(0);
@@ -291,11 +296,15 @@ export class Body {
         const big = Math.abs(rise) > 5.5;
         this.ledgePause = rise > 0 ? (big ? rand(0.25, 0.5) : rand(0.08, 0.16)) : big ? rand(0.4, 0.8) : rand(0.05, 0.12);
         this.peering = rise < 0 && big;
+        this.rearTarget = rise > 0 ? Math.min(rise, 7) * 0.6 : 0;
         this.ledgeArmed = false;
       }
     } else if (Math.abs(rise) < 1) this.ledgeArmed = true;
     this.ledgePause -= dt;
     if (this.ledgePause <= 0) this.peering = false;
+    // Rear up while sizing up the step, and stay a little reared until the front is up it.
+    if (rise < 0.5) this.rearTarget = 0;
+    this.rear = approach(this.rear, this.ledgePause > 0 ? this.rearTarget : this.rearTarget * 0.4, 10, dt);
     this.climb = approach(this.climb, this.ledgePause > 0 ? 0.05 : rise > 0.5 ? 0.45 : rise < -0.5 ? 0.55 : 1, 6, dt);
     const ds = this.speed * dt * this.climb;
     // Faster means longer strides first (up to what the legs can reach), then quicker ones.
@@ -427,7 +436,10 @@ export class Body {
   /** Heights along the spine: terrain under each point, draped over steps, eased in time. */
   private drape(dt: number) {
     const zt = this.zDrape;
-    for (let i = 0; i < SPINE; i++) zt[i] = this.ground(this.pts[i].x, this.pts[i].y);
+    for (let i = 0; i < SPINE; i++) {
+      zt[i] = this.ground(this.pts[i].x, this.pts[i].y);
+      if (i < SHOULDER + 3) zt[i] += this.rear * (1 - i / (SHOULDER + 3));
+    }
     for (let pass = 0; pass < 2; pass++) {
       for (let i = 1; i < SPINE; i++) zt[i] = Math.max(zt[i], zt[i - 1] - DRAPE_SLOPE);
       for (let i = SPINE - 2; i >= 0; i--) zt[i] = Math.max(zt[i], zt[i + 1] - DRAPE_SLOPE);
@@ -535,6 +547,7 @@ export class Body {
         }
         const fs = this.forward(leg.def.seg);
         leg.advance(dt, target, { x: -fs.y * leg.def.side, y: fs.x * leg.def.side });
+        if (!leg.swinging) this.footfalls.push({ x: leg.foot.x, y: leg.foot.y, leg });
       }
 
       // Never let a foot be dragged beyond physical reach; in a sprint it slides first.
