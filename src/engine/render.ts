@@ -1,4 +1,4 @@
-import { Body, Leg, SPINE, halfWidth } from './body';
+import { Body, Leg, NEARER, SPINE, halfWidth } from './body';
 import type { Palette } from './palette';
 
 /*
@@ -15,9 +15,10 @@ import type { Palette } from './palette';
  *   - Size. Higher is also nearer the camera and drawn bigger, point by point, so up on
  *     a sidebar the whole gecko is larger, rearing up a ledge its front half swells
  *     before its back, and held in the hand it looms.
- *   - Shadow. The shadow stays on the ground at the animal's true size and falls down
- *     and to the right by how high each part is, landing wherever the ground actually is
- *     — so from the top of a ledge it drops off the edge.
+ *   - Shadow. The shadow falls down and to the right by how high each part is above the
+ *     ground, and lies on whatever surface it lands on, lifted and scaled with it — so
+ *     on a panel it stays tucked under the gecko, and from the top of a ledge the part
+ *     that falls past the edge drops to the floor below.
  *   - Light. Where the spine crests over a ridge or lip its lit side catches a little
  *     more light; in the dip below one its shaded side goes a little deeper.
  */
@@ -89,12 +90,18 @@ export class GeckoRenderer {
     };
     for (let i = 0; i < SPINE; i++) {
       const p = this.spinePoint(b, i);
+      // Each part of the shadow lies on the surface it lands on, drawn lifted and scaled
+      // with that surface: on a panel it rides up with the panel's floor and stays
+      // tucked under the gecko; past the edge it drops to the note below.
       const o = castShadow(b, b.z[i], p.x, p.y);
-      disc(p.x + o, p.y + o, halfWidth(i) * b.breathScale(i) * b.squeeze[i], (x, y) => mark(x, y));
+      const g = b.ground(p.x + o + 0.5, p.y + o + 0.5);
+      const q = project(p.x + o, p.y + o, g);
+      disc(q.x, q.y, halfWidth(i) * b.breathScale(i) * b.squeeze[i] * (1 + NEARER * g), (x, y) => mark(x, y));
     }
     for (const p of this.legPixels(b, pal, flat)) {
       const o = castShadow(b, p.z, p.x, p.y);
-      mark(p.x + o, p.y + o);
+      const q = project(p.x + o, p.y + o, b.ground(p.x + o + 0.5, p.y + o + 0.5));
+      mark(Math.floor(q.x), Math.floor(q.y));
     }
     ctx.fillStyle = pal.shadow;
     for (let y = 0; y < sh; y++) for (let x = 0; x < sw; x++) {
@@ -145,7 +152,7 @@ export class GeckoRenderer {
       const f = b.forward(i);
       const z = b.z[i];
       const { x: cx, y: cy } = project(sp.x, sp.y, z);
-      const r = halfWidth(i) * b.breathScale(i) * b.squeeze[i] * b.nearness(sp.x, sp.y, z);
+      const r = halfWidth(i) * b.breathScale(i) * b.squeeze[i] * (1 + NEARER * Math.max(0, z));
       disc(cx, cy, r, (x, y, dx, dy, d2) => {
         const lx = x - this.bx, ly = y - this.by;
         if (lx < 0 || ly < 0 || lx >= this.bw || ly >= this.bh) return;
@@ -189,7 +196,7 @@ export class GeckoRenderer {
       return { x: Math.floor(q.x), y: Math.floor(q.y) };
     };
     const px = (p: { x: number; y: number }, c: string) => { ctx.fillStyle = c; ctx.fillRect(p.x, p.y, 1, 1); };
-    const s0 = b.nearness(b.pts[0].x, b.pts[0].y, b.z[0]);
+    const s0 = 1 + NEARER * Math.max(0, b.z[0]);
 
     // One dark pixel per eye, on the sides of the skull; closed, it reads as shade.
     for (const side of [1, -1]) {

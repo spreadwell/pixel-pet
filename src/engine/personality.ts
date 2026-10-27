@@ -1,4 +1,4 @@
-import { Body, Drive, TAIL_FIRST, halfWidth } from './body';
+import { Body, Drive, NEARER, TAIL_FIRST, halfWidth } from './body';
 import type { Bug, Particles, Swarm } from './bugs';
 import type { InputTracker } from './input';
 import { angleDiff, clamp, lerp, rand } from './math';
@@ -842,7 +842,7 @@ export class Personality {
     let best = Infinity;
     for (let i = 0; i < TAIL_FIRST; i += 2) {
       const p = b.project(b.pts[i].x, b.pts[i].y, b.z[i]);
-      best = Math.min(best, dist(p.x, p.y, x, y) - halfWidth(i) * b.nearness(b.pts[i].x, b.pts[i].y, b.z[i]));
+      best = Math.min(best, dist(p.x, p.y, x, y) - halfWidth(i) * (1 + NEARER * Math.max(0, b.z[i])));
     }
     return best;
   }
