@@ -15,6 +15,8 @@
  * Coordinates are CSS pixels.
  */
 
+import type { Ghost } from './nibble';
+
 const HIGHLIGHT = 'pixel-pet-jostle';
 /** The nibbler's highlight: letters that have been eaten and are not there to press. */
 const EATEN = 'pixel-pet-nibble';
@@ -45,6 +47,7 @@ export class Reactions {
   private highlight: Highlight | null = null;
   private jiggled = new WeakMap<Element, number>();
   private dirty = false;
+  private hadGhosts = false;
   /** A stolen letter in the gecko's mouth: where it is (CSS px), how much is left of it. */
   private carried: (Glyph & {
     x: number; y: number; angle: number; left: number; drop: number;
@@ -162,14 +165,26 @@ export class Reactions {
     this.dirty = true;
   }
 
-  draw() {
-    if (!this.dirty) return;
+  /** Draw everything; `ghosts` are eaten letters to show faintly in their places. */
+  draw(ghosts: Ghost[] = []) {
+    if (!this.dirty && !ghosts.length && !this.hadGhosts) return;
+    this.hadGhosts = ghosts.length > 0;
     this.dirty = this.letters.length > 0 || !!this.carried;
     const g = this.ctx, dpr = this.win.devicePixelRatio || 1;
     g.setTransform(1, 0, 0, 1, 0, 0);
     g.clearRect(0, 0, this.canvas.width, this.canvas.height);
     g.textBaseline = 'alphabetic';
     g.textAlign = 'left';
+    for (const gh of ghosts) {
+      const r = gh.range.getBoundingClientRect();
+      if (r.width < 1) continue;
+      g.setTransform(dpr, 0, 0, dpr, 0, 0);
+      g.font = gh.font;
+      g.globalAlpha = gh.alpha;
+      g.fillStyle = gh.color;
+      g.fillText(gh.ch, r.left, r.top + (g.measureText(gh.ch).fontBoundingBoxAscent || r.height * 0.8));
+    }
+    g.globalAlpha = 1;
     for (const l of this.letters) {
       // Pressed straight down into the page a touch, slightly flattened, then settling.
       const press = Math.min(1.3, l.strength) * Math.exp(-11 * l.t) * Math.sin(Math.min(1, l.t / 0.06) * Math.PI / 2);

@@ -10,7 +10,7 @@ Leave your pointer resting near it and it may stalk it. Move at it too fast and 
 
 Writing brings it food. Every few dozen words a fly drifts in from the edge of the window, and finishing a task brings out a cricket. A hungry gecko spots prey from farther away and hunts harder; a full one would rather bask. It stalks, freezes with its tail twitching, and strikes. It doesn't always catch them.
 
-Now and then it tastes a word with its tongue, plucks a letter out of it and scurries off somewhere quiet to eat it. **Only the display changes. Your note is never modified.** The letter grows back after a minute or so.
+Now and then it tastes a word with its tongue, plucks a letter out of it and scurries off somewhere quiet to eat it. **Only the display changes. Your note is never modified.** The eaten letter stays faintly visible, so your text is still readable, and fills back in over half a minute.
 
 ## Details
 

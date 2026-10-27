@@ -275,7 +275,7 @@ export class PetEngine {
       const s = this.brain.snout(), px = this.opts.px;
       this.reactions.hold((s.x + 0.5) * px, (s.y + 0.5) * px, this.body.headAngle);
     }
-    this.reactions.draw();
+    this.reactions.draw(this.nibbler.ghosts(performance.now()));
     if (covers.length) g.restore();
     for (const b of this.swarm.bugs) if (b.z >= 1) b.draw(g, pal, this.frame);
     this.particles.draw(g);

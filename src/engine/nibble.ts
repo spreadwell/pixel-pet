@@ -1,18 +1,26 @@
-import { rand } from './math';
-
 /*
- * Letter nibbling is purely visual. A nibbled character is added to a CSS custom
- * highlight that paints it transparent; the note's text is never touched. Letters
- * "grow back" after a while, and any nibble whose DOM text changes underneath it
- * (editing, re-render) is dropped immediately so the wrong glyph is never hidden.
+ * Letter eating is purely visual. An eaten character is added to a CSS custom highlight
+ * that paints it transparent, and a ghost of it is drawn in its place (by Reactions) at
+ * 20% opacity, so the text stays readable, coming back to full over half a minute; then
+ * the real letter shows again. The note's text is never touched, and any bite whose DOM
+ * text changes underneath it (editing, re-render) is dropped at once so the wrong glyph
+ * is never hidden.
  */
+
+/** How long an eaten letter takes to grow back, ms. */
+const REGROW_MS = 30000;
+/** How faint it is just after being eaten. */
+const EATEN_ALPHA = 0.2;
 
 const HIGHLIGHT = 'pixel-pet-nibble';
 const ROOTS = '.workspace-leaf .cm-content, .workspace-leaf .markdown-preview-sizer';
 
 export interface NibbleTarget { range: Range; ch: string; x: number; y: number; }
 
-interface Bite { range: Range; ch: string; node: Text; until: number; }
+/** An eaten letter as it should be drawn in its place. */
+export interface Ghost { range: Range; ch: string; font: string; color: string; alpha: number; }
+
+interface Bite { range: Range; ch: string; node: Text; since: number; font: string; color: string; }
 
 type HighlightRegistry = Map<string, { add(r: Range): void; delete(r: Range): boolean; clear(): void }>;
 
@@ -88,16 +96,29 @@ export class Nibbler {
 
   bite(t: NibbleTarget): boolean {
     if (!this.highlight || !this.locate(t)) return false;
+    const node = t.range.startContainer as Text;
+    const cs = this.win.getComputedStyle(node.parentElement!);
     this.highlight.add(t.range);
-    this.bites.push({ range: t.range, ch: t.ch, node: t.range.startContainer as Text, until: performance.now() + rand(35, 80) * 1000 });
+    this.bites.push({
+      range: t.range, ch: t.ch, node, since: performance.now(),
+      font: `${cs.fontStyle} ${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`, color: cs.color,
+    });
     return true;
+  }
+
+  /** Eaten letters to draw in their places, faint at first and filling back in. */
+  ghosts(now: number): Ghost[] {
+    return this.bites.map((b) => ({
+      range: b.range, ch: b.ch, font: b.font, color: b.color,
+      alpha: Math.min(1, EATEN_ALPHA + (1 - EATEN_ALPHA) * ((now - b.since) / REGROW_MS)),
+    }));
   }
 
   /** Drop stale bites and regrow old ones. Call a few times a second. */
   maintain(now: number) {
     if (!this.highlight) return;
     this.bites = this.bites.filter((b) => {
-      const ok = now < b.until && b.node.isConnected && b.range.toString() === b.ch;
+      const ok = now - b.since < REGROW_MS && b.node.isConnected && b.range.toString() === b.ch;
       if (!ok) this.highlight!.delete(b.range);
       return ok;
     });
