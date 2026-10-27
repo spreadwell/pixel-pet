@@ -7,7 +7,7 @@ import { rand } from './math';
  * (editing, re-render) is dropped immediately so the wrong glyph is never hidden.
  */
 
-const HIGHLIGHT = 'butter-pet-nibble';
+const HIGHLIGHT = 'pixel-pet-nibble';
 const ROOTS = '.workspace-leaf .cm-content, .workspace-leaf .markdown-preview-sizer';
 
 export interface NibbleTarget { range: Range; ch: string; x: number; y: number; }

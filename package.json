@@ -1,8 +1,8 @@
 {
-  "name": "butter-pet",
+  "name": "pixel-pet",
   "version": "0.1.0",
   "private": true,
-  "description": "A living pixel gecko that roams your Obsidian workspace.",
+  "description": "A pixel pet that lives in your workspace. It hides under your panels, crosses your notes and hunts the bugs your writing attracts. Starts with a gecko.",
   "main": "main.js",
   "license": "MIT",
   "author": "Spreadwell",

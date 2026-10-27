@@ -1,9 +1,9 @@
 {
-  "id": "butter-pet",
-  "name": "Butter Pet",
+  "id": "pixel-pet",
+  "name": "Pixel Pet",
   "version": "0.1.0",
   "minAppVersion": "1.7.2",
-  "description": "A living pixel gecko that roams your workspace, hunts the bugs your writing attracts, and nibbles the occasional letter.",
+  "description": "A pixel pet that lives in your workspace. It hides under your panels, crosses your notes and hunts the bugs your writing attracts. Starts with a gecko.",
   "author": "Spreadwell",
   "authorUrl": "https://github.com/spreadwell",
   "isDesktopOnly": false

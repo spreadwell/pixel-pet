@@ -1,5 +1,5 @@
 import { App, PluginSettingTab, Setting } from 'obsidian';
-import type ButterPetPlugin from './main';
+import type PixelPetPlugin from './main';
 import type { Traits } from './engine/personality';
 
 export interface PetSettings {
@@ -31,8 +31,8 @@ export const DEFAULT_SETTINGS: PetSettings = {
   reducedMotion: 'system',
 };
 
-export class ButterPetSettingTab extends PluginSettingTab {
-  constructor(app: App, private plugin: ButterPetPlugin) {
+export class PixelPetSettingTab extends PluginSettingTab {
+  constructor(app: App, private plugin: PixelPetPlugin) {
     super(app, plugin);
   }
 

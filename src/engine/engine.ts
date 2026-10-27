@@ -50,7 +50,7 @@ export class PetEngine {
   constructor(private win: Window, private opts: PetOptions) {
     const doc = win.document;
     this.canvas = doc.createElement('canvas');
-    this.canvas.className = 'butter-pet-overlay';
+    this.canvas.className = 'pixel-pet-overlay';
     this.canvas.setAttribute('aria-hidden', 'true');
     this.ctx2d = this.canvas.getContext('2d')!;
     this.world = new World(win);

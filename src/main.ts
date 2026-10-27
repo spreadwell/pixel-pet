@@ -1,12 +1,12 @@
 import { Editor, MarkdownFileInfo, MarkdownView, Platform, Plugin } from 'obsidian';
 import { PetEngine, PetOptions } from './engine/engine';
 import { rollTraits } from './engine/personality';
-import { ButterPetSettingTab, DEFAULT_SETTINGS, PetSettings } from './settings';
+import { PixelPetSettingTab, DEFAULT_SETTINGS, PetSettings } from './settings';
 
 const WORD = /[\p{L}\p{N}]+/gu;
 const DONE_TASK = /^\s*(?:[-*+]|\d+[.)])\s+\[[xX]\]/gm;
 
-export default class ButterPetPlugin extends Plugin {
+export default class PixelPetPlugin extends Plugin {
   settings: PetSettings = { ...DEFAULT_SETTINGS };
   private engine: PetEngine | null = null;
   private counts = new Map<string, { words: number; tasks: number }>();
@@ -15,7 +15,7 @@ export default class ButterPetPlugin extends Plugin {
 
   async onload() {
     await this.loadSettings();
-    this.addSettingTab(new ButterPetSettingTab(this.app, this));
+    this.addSettingTab(new PixelPetSettingTab(this.app, this));
 
     this.addRibbonIcon('paw-print', 'Toggle pet', () => this.toggle());
     this.addCommand({ id: 'toggle', name: 'Show or hide the pet', callback: () => this.toggle() });

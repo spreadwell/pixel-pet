@@ -1,6 +1,6 @@
-# Butter Pet
+# Pixel Pet
 
-A small pixel-art gecko that lives in your Obsidian workspace.
+A pixel pet that lives in your Obsidian workspace. The first pet is a gecko.
 
 Every gecko has its own personality. Some are quick and bold, others are wary, lazy or always hungry. It explores in short dashes, stops to look around and taste the air, basks in a favorite corner, and takes naps. It keeps to the seams between your panels the way real geckos keep to the cracks between stones.
 
