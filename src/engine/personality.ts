@@ -464,11 +464,17 @@ const StateHandlers: Record<State, Handler> = {
         return { targetSpeed };
       }
       g.headLook.lookAt(angleDiff(g.angle, toLetter));
-      // Taste it first, a couple of times, then snatch it out of the word.
+      // Taste it first, a couple of times, then snatch it out of the word. Sometimes it
+      // is stuck fast and takes a struggle to pull free.
       if (sd.timer % 30 === 5 && sd.flicks < 2) { g.flick(); sd.flicks++; }
       if (sd.timer > 75) {
-        if (!g.stealLetter()) return { targetSpeed: 0, transition: STATE.IDLE };
+        const stuck = Math.random() < g.stuckChance;
+        sd.slot = { ...at };
+        sd.toLetter = toLetter;
+        if (!g.stealLetter(stuck)) return { targetSpeed: 0, transition: STATE.IDLE };
         sd.phase = 'grab'; sd.timer = 0;
+        sd.stuck = stuck;
+        sd.len = stuck ? 70 + Math.random() * 90 : 12;
       }
       return { targetSpeed: 0 };
     },
@@ -563,7 +569,19 @@ function stealing(g: Personality): Result {
   const sd = g.stateData, head = g.head, b = g.body;
   if (sd.phase === 'grab') {
     b.mouthTarget = 1;
-    if (sd.timer > 12) {
+    if (sd.stuck) {
+      // Jaws clamped, it braces and wrenches its head side to side in bursts.
+      const t = sd.timer, burst = Math.floor(t / 28) % 2 === 0;
+      g.headLook.lookAt(angleDiff(g.angle, sd.toLetter) + Math.sin(t * 0.85) * (burst ? 0.5 : 0.12));
+      g.c.reactions.tug(burst ? 0.55 + 0.45 * Math.abs(Math.sin(t * 0.42)) : 0.3);
+    }
+    if (sd.timer > sd.len) {
+      if (sd.stuck) {
+        // Pop: it comes free, scattering a few crumbs from where it was.
+        g.c.particles.burst(sd.slot.x, sd.slot.y, g.c.pal.ink, 3, 10);
+        g.flick();
+      }
+      g.c.reactions.free();
       b.mouthTarget = 0.35;
       sd.spot = g.eatingSpot();
       g.planRoute(sd.spot.x, sd.spot.y);
@@ -647,6 +665,8 @@ export class Personality {
   hideFast = false;
   /** Has a stolen letter in its mouth. */
   carrying = false;
+  /** How often a letter is stuck fast and takes a struggle to pull free. */
+  stuckChance = 0.45;
   private route: Waypoint[] | null = null;
   private routeAt = 0;
   private routeTo: { x: number; y: number } | null = null;
@@ -901,12 +921,12 @@ export class Personality {
 
   dropLetter() { this.letter = null; this.letterAt = null; }
 
-  /** Snatch the target letter out of its word: hidden there, and now in its mouth. */
-  stealLetter() {
+  /** Snatch the target letter out of its word: hidden there, and now in its mouth (or stuck). */
+  stealLetter(stuck = false) {
     const t = this.letter;
     this.dropLetter();
     if (!t || !this.c.nibbler.bite(t)) return false;
-    this.c.reactions.carry(t.range, t.ch);
+    this.c.reactions.carry(t.range, t.ch, stuck);
     this.carrying = true;
     this.body.flickTongue();
     return true;
@@ -1102,7 +1122,7 @@ export class Personality {
     b.lidTarget = sleeping ? (this.sleepPeeking ? 0.25 : 1) : this.petted ? 0.55 : 0;
     b.breathRate = sleeping || this.state === STATE.BASKING || this.petted ? 0.29 : 0.57;
     b.breathDepth = sleeping ? 0.085 : 0.05;
-    b.tailTwitch = this.state === STATE.HELD ? 0.8 : this.state === STATE.HUNT ? 0.7 : this.state === STATE.STARTLE ? 0.35 : 0;
+    b.tailTwitch = this.state === STATE.HELD ? 0.8 : this.state === STATE.NIBBLE && this.stateData.phase === 'grab' && this.stateData.stuck ? 0.6 : this.state === STATE.HUNT ? 0.7 : this.state === STATE.STARTLE ? 0.35 : 0;
     if (this.mouthTicks > 0) { this.mouthTicks--; b.mouthTarget = this.mouthTicks > 4 ? 1 : 0.4; }
     else if (this.state !== STATE.NIBBLE && this.state !== STATE.HUNT) b.mouthTarget = 0;
 

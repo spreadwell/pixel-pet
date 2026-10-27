@@ -73,8 +73,8 @@ interface LegDef {
 // of its trunk length per cycle — so each foot sweeps visibly from ahead of its girdle
 // to well behind it.
 const LEGS: LegDef[] = [
-  { seg: SHOULDER, side: -1, front: true, l1: 2.6, l2: 2.6, restFwd: 1.0, restOut: 2.5, phase: 0 },
-  { seg: SHOULDER, side: 1, front: true, l1: 2.6, l2: 2.6, restFwd: 1.0, restOut: 2.5, phase: 0.5 },
+  { seg: SHOULDER, side: -1, front: true, l1: 2.6, l2: 2.6, restFwd: 1.0, restOut: 2.8, phase: 0 },
+  { seg: SHOULDER, side: 1, front: true, l1: 2.6, l2: 2.6, restFwd: 1.0, restOut: 2.8, phase: 0.5 },
   { seg: HIP, side: -1, front: false, l1: 2.8, l2: 2.8, restFwd: -1.5, restOut: 2.7, phase: 0.5 },
   { seg: HIP, side: 1, front: false, l1: 2.8, l2: 2.8, restFwd: -1.5, restOut: 2.7, phase: 0 },
 ];
@@ -103,6 +103,8 @@ export class Leg {
   dur = 0.1;
   from: Pt = { x: 0, y: 0 };
   private cycle = 0;
+  /** The knee has been placed at least once, so it can be kept continuous. */
+  kneeSet = false;
   /** 0..1 height of a lifted foot, for shadows. */
   lift = 0;
 
@@ -372,7 +374,8 @@ export class Body {
     // girdles to the other, flipping every step — plus a travelling wave down the tail.
     // Positive offsets are toward the animal's left; mid-trunk goes left (concave right)
     // while the left fore- and right hind-foot swing.
-    this.flexAmp = approach(this.flexAmp, 1.25 * walking * (1 + 0.3 * sNorm), 5, dt);
+    // Flex peaks at a brisk walk; flat out, the trunk stiffens so it stays over its feet.
+    this.flexAmp = approach(this.flexAmp, 1.25 * walking * (1 - 0.45 * sNorm), 5, dt);
     const s = Math.sin(this.gaitPhase * TAU) * this.flexAmp;
     for (let i = NECK + 1; i < SPINE; i++) {
       const p = path[i];
@@ -526,7 +529,7 @@ export class Body {
           const dur = clamp((this.stride * SWING_FRACTION) / Math.max(this.speed, 1), 0.04, 0.28);
           leg.startSwing(dur);
           swingingCount++;
-        } else if ((stretch > reach * COMFORT && swingingCount < 2 && !this.skitter) || stretch > reach || (!moving && off > (this.curl > 0.5 ? 1 : 2) && swingingCount < 2)) {
+        } else if ((stretch > reach * COMFORT && swingingCount < 2 && !this.skitter) || stretch > reach || (this.underfoot(leg, hip) && swingingCount < 2) || (!moving && off > (this.curl > 0.5 ? 1 : 2) && swingingCount < 2)) {
           leg.startSwing(stretch > reach * COMFORT ? 0.08 : 0.13);
           swingingCount++;
         }
@@ -566,19 +569,29 @@ export class Body {
     }
   }
 
+  /**
+   * Has the body swung over this planted foot (after a sharp turn, or the flex of a
+   * sprint), leaving it underneath or folded up against the hip? Then it needs a step.
+   */
+  private underfoot(leg: Leg, hip: Pt) {
+    const f = this.forward(leg.def.seg);
+    const dx = leg.foot.x - hip.x, dy = leg.foot.y - hip.y;
+    return (dx * -f.y + dy * f.x) * leg.def.side < 0.8 || Math.hypot(dx, dy) < 0.32 * (leg.def.l1 + leg.def.l2);
+  }
+
   private solveKnee(leg: Leg, hip: Pt): Pt {
     const { seg, side, front, l1, l2 } = leg.def;
     const f = this.forward(seg);
     const ox = -f.y * side, oy = f.x * side;
-    // Elbows sit behind the hands on the forelegs; knees face forward on the hind legs.
-    // Both sweep outward at mid-swing, which gives the popping-elbow lizard walk.
+    // A sprawling lizard's elbows and knees always point out from the body: elbows a
+    // little back, knees a little forward, and fully out at mid-swing.
     const swing = leg.swinging ? Math.sin(leg.t * Math.PI) : 0;
     let hx: number, hy: number;
     if (front) {
-      const back = 0.62 * (1 - swing);
+      const back = 0.3 * (1 - swing);
       hx = ox * (1 - back) - f.x * back; hy = oy * (1 - back) - f.y * back;
     } else {
-      const fwd = 0.32 * (1 - swing);
+      const fwd = 0.2 * (1 - swing);
       hx = ox * (1 - fwd) + f.x * fwd; hy = oy * (1 - fwd) + f.y * fwd;
     }
     const fx = leg.foot.x, fy = leg.foot.y;
@@ -589,6 +602,17 @@ export class Body {
     const b = Math.acos(cosB);
     const k1 = { x: hip.x + l1 * Math.cos(base + b), y: hip.y + l1 * Math.sin(base + b) };
     const k2 = { x: hip.x + l1 * Math.cos(base - b), y: hip.y + l1 * Math.sin(base - b) };
+    // Never bent in toward the body; otherwise the joint stays nearest where it just was,
+    // so it can't pop across to its mirror position as the body passes over the foot.
+    const out1 = (k1.x - hip.x) * ox + (k1.y - hip.y) * oy, out2 = (k2.x - hip.x) * ox + (k2.y - hip.y) * oy;
+    const inward = -0.6 * l1;
+    if (out1 < inward !== out2 < inward) return out1 > out2 ? k1 : k2;
+    const pk = leg.knee;
+    if (leg.kneeSet) {
+      const n1 = Math.hypot(k1.x - pk.x, k1.y - pk.y), n2 = Math.hypot(k2.x - pk.x, k2.y - pk.y);
+      if (Math.abs(n1 - n2) > 0.05) return n1 < n2 ? k1 : k2;
+    }
+    leg.kneeSet = true;
     const d1 = (k1.x - hip.x) * hx + (k1.y - hip.y) * hy;
     const d2 = (k2.x - hip.x) * hx + (k2.y - hip.y) * hy;
     return d1 >= d2 ? k1 : k2;

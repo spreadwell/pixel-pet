@@ -16,6 +16,8 @@
  */
 
 const HIGHLIGHT = 'pixel-pet-jostle';
+/** The nibbler's highlight: letters that have been eaten and are not there to press. */
+const EATEN = 'pixel-pet-nibble';
 const LETTER_ROOTS = '.cm-content, .markdown-preview-view';
 const JIGGLE = [
   '.workspace-tab-header', '.side-dock-ribbon-action', '.nav-file-title', '.nav-folder-title',
@@ -44,7 +46,11 @@ export class Reactions {
   private jiggled = new WeakMap<Element, number>();
   private dirty = false;
   /** A stolen letter in the gecko's mouth: where it is (CSS px), how much is left of it. */
-  private carried: (Glyph & { x: number; y: number; angle: number; left: number; drop: number }) | null = null;
+  private carried: (Glyph & {
+    x: number; y: number; angle: number; left: number; drop: number;
+    /** Where it came from, how far it has come out (0 in its slot, 1 in the jaws), and the strain on it. */
+    sx: number; sy: number; pull: number; tension: number; stuck: boolean;
+  }) | null = null;
 
   constructor(private win: Window) {
     const doc = win.document;
@@ -102,14 +108,28 @@ export class Reactions {
 
   get active() { return this.letters.length > 0 || !!this.carried; }
 
-  /** Take a letter in the mouth (its real one is hidden by the nibbler). */
-  carry(range: Range, ch: string) {
+  /**
+   * Take a letter in the mouth (its real one is hidden by the nibbler). A stuck letter
+   * stays in its slot, straining toward the jaws, until it is `free`d.
+   */
+  carry(range: Range, ch: string, stuck = false) {
     const el = range.startContainer.parentElement;
     if (!el) return;
     const cs = this.win.getComputedStyle(el);
-    this.carried = { ch, font: `${cs.fontStyle} ${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`, color: cs.color, x: 0, y: 0, angle: 0, left: 1, drop: 0 };
+    const r = range.getBoundingClientRect();
+    this.carried = {
+      ch, font: `${cs.fontStyle} ${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`, color: cs.color,
+      x: r.left + r.width / 2, y: r.top + r.height / 2, angle: 0, left: 1, drop: 0,
+      sx: r.left + r.width / 2, sy: r.top + r.height / 2, pull: 0, tension: 0, stuck,
+    };
     this.dirty = true;
   }
+
+  /** How hard a stuck letter is being pulled, 0..1. */
+  tug(tension: number) { if (this.carried) { this.carried.tension = tension; this.dirty = true; } }
+
+  /** A stuck letter pops free and flies into the jaws. */
+  free() { if (this.carried) { this.carried.stuck = false; this.carried.tension = 0; this.dirty = true; } }
 
   /** Keep the carried letter at the snout (CSS px), pointing the way the head does. */
   hold(x: number, y: number, angle: number) {
@@ -133,6 +153,7 @@ export class Reactions {
   update(dt: number) {
     const c = this.carried;
     if (c && c.drop > 0) { c.drop += dt; if (c.drop > 0.35) this.carried = null; this.dirty = true; }
+    if (c && !c.stuck && c.pull < 1) { c.pull = Math.min(1, c.pull + dt * 9); this.dirty = true; }
     if (!this.letters.length) return;
     for (const l of this.letters) l.t += dt;
     const done = this.letters.filter((l) => l.t >= LETTER_LIFE || l.range.collapsed);
@@ -164,18 +185,29 @@ export class Reactions {
     t.clearRect(0, 0, this.top.width, this.top.height);
     const c = this.carried;
     if (c) {
-      // Gripped crosswise in the jaws, shrinking as it is eaten.
       const g = t;
       g.setTransform(dpr, 0, 0, dpr, 0, 0);
       g.globalAlpha = c.drop > 0 ? Math.max(0, 1 - c.drop / 0.35) : 1;
-      g.translate(c.x, c.y + c.drop * 14);
-      g.rotate(c.angle + Math.PI / 2);
       g.font = c.font;
       g.textAlign = 'center';
       g.textBaseline = 'middle';
-      const s = 0.8 * (0.35 + 0.65 * c.left);
-      g.scale(s, s);
       g.fillStyle = c.color;
+      if (c.stuck) {
+        // Still lodged in the word: upright in its slot, stretched toward the jaws by the strain.
+        const dx = c.x - c.sx, dy = c.y - c.sy, a = Math.atan2(dy, dx);
+        const out = 0.06 + 0.1 * c.tension;
+        g.translate(c.sx + dx * out, c.sy + dy * out);
+        g.rotate(a);
+        g.scale(1 + 0.35 * c.tension, 1 - 0.12 * c.tension);
+        g.rotate(-a);
+      } else {
+        // Flying into the jaws, then gripped crosswise there, shrinking as it is eaten.
+        const p = c.pull * c.pull * (3 - 2 * c.pull);
+        g.translate(c.sx + (c.x - c.sx) * p, c.sy + (c.y - c.sy) * p + c.drop * 14);
+        g.rotate((c.angle + Math.PI / 2) * p);
+        const s = (1 - 0.2 * p) * (0.35 + 0.65 * c.left);
+        g.scale(s, s);
+      }
       g.fillText(c.ch, 0, 0);
       g.globalAlpha = 1;
     }
@@ -200,6 +232,8 @@ export class Reactions {
       if (x >= b.left - 2 && x <= b.right + 2 && y >= b.top - 2 && y <= b.bottom + 2) { hit = r; offset = o; break; }
     }
     if (!hit) return false;
+    // A letter that has been eaten isn't there to be pressed.
+    if (this.eaten(node, offset)) return true;
     const live = this.letters.find((l) => l.node === node && l.offset === offset);
     if (live) { live.t = Math.min(live.t, 0.08); live.strength = Math.max(live.strength, strength); return true; }
     const cs = this.win.getComputedStyle(parent);
@@ -215,6 +249,14 @@ export class Reactions {
     this.highlight.add(hit);
     this.dirty = true;
     return true;
+  }
+
+  private eaten(node: Text, offset: number) {
+    const reg = (this.win as unknown as { CSS?: { highlights?: Map<string, Iterable<Range>> } }).CSS?.highlights;
+    const hl = reg?.get(EATEN);
+    if (!hl) return false;
+    for (const r of hl) if (r.startContainer === node && r.startOffset === offset) return true;
+    return false;
   }
 
   private jiggle(x: number, y: number, dx: number, dy: number, strength: number) {
