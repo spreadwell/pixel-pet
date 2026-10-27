@@ -1,4 +1,4 @@
-import { Body, Leg, SPINE, halfWidth } from './body';
+import { Body, Leg, NEARER, SPINE, halfWidth } from './body';
 import type { Palette } from './palette';
 
 /*
@@ -9,25 +9,25 @@ import type { Palette } from './palette';
  * the silhouette changes pixel-by-pixel as the animal moves instead of jumping as a
  * whole. Each covered pixel remembers which side of the spine it lies on.
  *
- * Height shows three ways, as it would to a camera looking down:
- *   - Size. Whatever is higher is nearer the camera and drawn bigger, point by point,
- *     so up on a sidebar the whole gecko is larger, rearing up a ledge its front half
- *     swells before its back, and held in the hand it looms.
+ * Height shows four ways, as it would to a camera looking down at a slight angle:
+ *   - Lift. Whatever is higher is drawn higher up the screen, the way "up" reads in an
+ *     isometric view, so climbing onto something visibly raises it.
+ *   - Size. Higher is also nearer the camera and drawn bigger, point by point, so up on
+ *     a sidebar the whole gecko is larger, rearing up a ledge its front half swells
+ *     before its back, and held in the hand it looms.
  *   - Shadow. The shadow stays on the ground at the animal's true size and falls down
  *     and to the right by how high each part is, landing wherever the ground actually is
  *     — so from the top of a ledge it drops off the edge.
- *   - Light. Where the spine crests over a ridge or lip it catches the light; in the
- *     dip below one it falls into shade.
+ *   - Light. Where the spine crests over a ridge or lip its lit side catches a little
+ *     more light; in the dip below one its shaded side goes a little deeper.
  */
 
 interface LegPixel { x: number; y: number; c: string; lift: number; z: number; }
 type Project = (x: number, y: number, z: number) => { x: number; y: number };
 
-/** How much bigger something is drawn per art px of height. */
-const NEARER = 0.025;
 
 /** Shadow offset (art px) for a pixel `h` above the ground. */
-const shadowOffset = (h: number) => 1 + Math.round(Math.min(8, Math.max(0, h * 0.9)));
+const shadowOffset = (h: number) => 1 + Math.round(Math.min(6, Math.max(0, h * 0.6)));
 
 /** Where the shadow of a point at height `z` lands, measured against the ground where it falls. */
 function castShadow(b: Body, z: number, x: number, y: number) {
@@ -70,12 +70,7 @@ export class GeckoRenderer {
     if (toLight > 0.25) this.lit = 1;
     else if (toLight < -0.25) this.lit = -1;
 
-    // Nearer the camera, drawn bigger: points spread out from the middle of the body.
-    const c = b.pts[12];
-    const project: Project = (x, y, z) => {
-      const s = 1 + NEARER * Math.max(0, z);
-      return { x: c.x + (x - c.x) * s, y: c.y + (y - c.y) * s };
-    };
+    const project: Project = (x, y, z) => b.project(x, y, z);
     const flat: Project = (x, y) => ({ x, y });
 
     this.frame(b, project);
@@ -179,7 +174,7 @@ export class GeckoRenderer {
       const k = y * bw + x;
       if (depth[k] <= 0) continue;
       const lit = (lat[k] >= 0 ? 1 : -1) === this.lit, d = bend[seg[k]];
-      ctx.fillStyle = d > 0.3 ? (lit ? pal.crest : pal.base) : d < -0.3 ? (lit ? pal.shade : pal.crease) : lit ? pal.base : pal.shade;
+      ctx.fillStyle = lit ? (d > 0.5 ? pal.crest : pal.base) : d < -0.5 ? pal.crease : pal.shade;
       ctx.fillRect(bx + x, by + y, 1, 1);
     }
   }

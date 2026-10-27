@@ -85,6 +85,10 @@ const COMFORT = 0.9;
 const MAX_STEP_HZ = 8;
 /** Steepest the body drapes over a step: height change per art px of spine. */
 const DRAPE_SLOPE = 0.8;
+/** Drawn bigger per art px of height: higher is nearer the camera. */
+export const NEARER = 0.025;
+/** Drawn higher up the screen per art px of height, the way "up" reads in an isometric view. */
+export const LIFT = 0.6;
 /** How high a held gecko is lifted above the ground, in art px. */
 const HELD_Z = 12;
 /** Horizontal length of one spine segment that rises `dz`. */
@@ -241,11 +245,21 @@ export class Body {
 
   get isHeld() { return !!this.held; }
 
+  /**
+   * Where a point at height `z` is drawn: lifted up the screen, and spread out from the
+   * middle of the body because it is nearer the camera.
+   */
+  project(x: number, y: number, z: number) {
+    const c = this.pts[12], h = Math.max(0, z), s = 1 + NEARER * h;
+    return { x: c.x + (x - c.x) * s, y: c.y + (y - c.y) * s - LIFT * h };
+  }
+
   /** Pick the gecko up at (x, y), gripping the nearest spine point. */
   grab(x: number, y: number) {
     let best = 0, bd = Infinity;
     for (let i = 0; i < SPINE; i++) {
-      const d = Math.hypot(this.pts[i].x - x, this.pts[i].y - y);
+      const p = this.project(this.pts[i].x, this.pts[i].y, this.z[i]);
+      const d = Math.hypot(p.x - x, p.y - y);
       if (d < bd) { bd = d; best = i; }
     }
     this.held = { i: best, x, y };
@@ -382,9 +396,10 @@ export class Body {
   /** Dangling from the user's grip: squirming, legs paddling, lifted high. */
   private updateHeld(dt: number) {
     const h = this.held!, pts = this.pts;
+    // Hold it so the gripped point, as drawn (lifted), stays under the pointer.
     const g = pts[h.i];
     g.x = approach(g.x, h.x, 30, dt);
-    g.y = approach(g.y, h.y, 30, dt);
+    g.y = approach(g.y, h.y + LIFT * this.z[h.i], 30, dt);
     // Each free end trails from the grip, stiff enough to keep its shape, with a squirm
     // running along it.
     const hang = (from: number, to: number, step: number) => {

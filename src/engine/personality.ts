@@ -1,4 +1,4 @@
-import { Body, Drive, TAIL_FIRST, halfWidth } from './body';
+import { Body, Drive, NEARER, TAIL_FIRST, halfWidth } from './body';
 import type { Bug, Particles, Swarm } from './bugs';
 import type { InputTracker } from './input';
 import { angleDiff, clamp, lerp, rand } from './math';
@@ -836,10 +836,14 @@ export class Personality {
     this.destY = target.y;
   }
 
-  /** Shortest distance from (x, y) to the head and trunk. */
+  /** Shortest distance from (x, y) to the head and trunk as drawn (lifted by height). */
   bodyDistance(x: number, y: number) {
+    const b = this.body;
     let best = Infinity;
-    for (let i = 0; i < TAIL_FIRST; i += 2) best = Math.min(best, dist(this.body.pts[i].x, this.body.pts[i].y, x, y) - halfWidth(i));
+    for (let i = 0; i < TAIL_FIRST; i += 2) {
+      const p = b.project(b.pts[i].x, b.pts[i].y, b.z[i]);
+      best = Math.min(best, dist(p.x, p.y, x, y) - halfWidth(i) * (1 + NEARER * Math.max(0, b.z[i])));
+    }
     return best;
   }
 
