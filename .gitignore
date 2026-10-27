@@ -2,6 +2,7 @@ node_modules/
 dist/
 harness/harness.js
 harness/studio.js
+harness/compare.js
 main.js
 *.zip
 *.log

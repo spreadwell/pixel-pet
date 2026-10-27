@@ -10,8 +10,11 @@ import { TAU, angleDiff, approach, approachAngle, clamp, lerp, noise1, rand } fr
  * sprawling lizard's does, while the head stays stabilised.
  *
  * Gait phase advances with distance travelled, never with time, so planted feet never
- * slide. Diagonal pairs (trot) swing together; a leg that is over-stretched or badly
- * placed after a turn takes a quick corrective step.
+ * slide. At a stroll it walks the way lizards do, one foot at a time in lateral
+ * sequence (left hind, left fore, right hind, right fore), each foot down most of the
+ * time and swung forward quickly; speeding up, that blends into a trot, diagonal pairs
+ * swinging together. A leg that is over-stretched or badly placed after a turn takes a
+ * quick corrective step.
  *
  * The ground has height (see World.groundAt). Each spine point takes the height of the
  * terrain under it, and the body drapes over steps like a rope, never steeper than
@@ -32,7 +35,13 @@ export const SHOULDER = 8;
 export const HIP = 17;
 const SEG = 1;
 
-const SWING_FRACTION = 0.4;
+/** Share of each step cycle a foot spends in the air: short at a walk, longer at a trot. */
+const SWING_WALK = 0.25;
+const SWING_TROT = 0.4;
+/** Speeds (art px/s) over which the walk blends into a trot. */
+const WALK_TO_TROT: [number, number] = [12, 42];
+/** Lateral-sequence walk phases for the legs in LEGS order (LF, RF, LH, RH). */
+const WALK_PHASES = [0.25, 0.75, 0, 0.5];
 
 // Half-width profile, snout → tail tip. Drawn in the style of classic lizard sprites: a
 // small blunt head, a pinched neck, a slim trunk a few pixels wide, and a whip tail
@@ -105,8 +114,12 @@ export class Leg {
   private cycle = 0;
   /** 0..1 height of a lifted foot, for shadows. */
   lift = 0;
+  /** Where this leg is in the step cycle relative to the others (walk ↔ trot). */
+  phase: number;
+  /** The way the toes point, fixed when the foot is set down. */
+  toe = 0;
 
-  constructor(readonly def: LegDef) {}
+  constructor(readonly def: LegDef) { this.phase = def.phase; }
 
   startSwing(dur: number) {
     this.swinging = true;
@@ -117,13 +130,13 @@ export class Leg {
 
   /** Returns true if the gait cycle for this leg rolled over. */
   rolled(gaitPhase: number): boolean {
-    const c = Math.floor(gaitPhase + this.def.phase);
+    const c = Math.floor(gaitPhase + this.phase);
     if (c === this.cycle) return false;
     this.cycle = c;
     return true;
   }
 
-  syncCycle(gaitPhase: number) { this.cycle = Math.floor(gaitPhase + this.def.phase); }
+  syncCycle(gaitPhase: number) { this.cycle = Math.floor(gaitPhase + this.phase); }
 
   /** `out` is the sideways direction away from the body: the foot swings in an arc. */
   advance(dt: number, target: Pt, out: Pt) {
@@ -192,6 +205,10 @@ export class Body {
   ground: (x: number, y: number) => number = () => 0;
   /** Crawling under a panel rather than over the terrain. */
   under = false;
+  /** Walk in lateral sequence at low speed (off: always trot, the old gait). */
+  natural = true;
+  /** 0 walking → 1 trotting. */
+  private trot = 0;
   /** Feet that came down this tick (the engine drains these to make things react). */
   footfalls: { x: number; y: number; leg: Leg }[] = [];
   /** Speed factor from the slope ahead: below 1 climbing up, a little below going down. */
@@ -373,7 +390,8 @@ export class Body {
     // Positive offsets are toward the animal's left; mid-trunk goes left (concave right)
     // while the left fore- and right hind-foot swing.
     // Flex peaks at a brisk walk; flat out, the trunk stiffens so it stays over its feet.
-    this.flexAmp = approach(this.flexAmp, 1.25 * walking * (1 - 0.45 * sNorm), 5, dt);
+    // The trunk flex is timed to the trot; at a slow sequenced walk it is gentler.
+    this.flexAmp = approach(this.flexAmp, 1.25 * walking * (1 - 0.45 * sNorm) * lerp(0.45, 1, this.trot), 5, dt);
     const s = Math.sin(this.gaitPhase * TAU) * this.flexAmp;
     for (let i = NECK + 1; i < SPINE; i++) {
       const p = path[i];
@@ -509,6 +527,9 @@ export class Body {
 
   private placeLegs(init: boolean, dt = 0) {
     const moving = this.speed > 1.5;
+    this.trot = this.natural ? clamp((this.speed - WALK_TO_TROT[0]) / (WALK_TO_TROT[1] - WALK_TO_TROT[0]), 0, 1) : 1;
+    const swingShare = lerp(SWING_WALK, SWING_TROT, this.trot);
+    this.legs.forEach((l, i) => { l.phase = lerp(WALK_PHASES[i], l.def.phase, this.trot); });
     const vx = Math.cos(this.heading) * this.speed, vy = Math.sin(this.heading) * this.speed;
     let swingingCount = this.legs.filter((l) => l.swinging).length;
 
@@ -516,7 +537,7 @@ export class Body {
       const hip = this.hipOf(leg);
       leg.hip = hip;
       const rest = this.restOf(leg, hip);
-      if (init) { leg.foot = { ...rest }; continue; }
+      if (init) { leg.foot = { ...rest }; leg.toe = this.toeAngle(leg); continue; }
 
       const reach = leg.def.l1 + leg.def.l2;
       const off = Math.hypot(leg.foot.x - rest.x, leg.foot.y - rest.y);
@@ -524,7 +545,7 @@ export class Body {
 
       if (!leg.swinging) {
         if (moving && leg.rolled(this.gaitPhase)) {
-          const dur = clamp((this.stride * SWING_FRACTION) / Math.max(this.speed, 1), 0.04, 0.28);
+          const dur = clamp((this.stride * swingShare) / Math.max(this.speed, 1), 0.04, 0.28);
           leg.startSwing(dur);
           swingingCount++;
         } else if ((stretch > reach * COMFORT && swingingCount < 2 && !this.skitter) || stretch > reach || (this.underfoot(leg, hip) && swingingCount < 2) || (!moving && off > (this.curl > 0.5 ? 1 : 2) && swingingCount < 2)) {
@@ -536,8 +557,8 @@ export class Body {
 
       if (leg.swinging) {
         const remaining = (1 - leg.t) * leg.dur;
-        // Land 30% of a stride ahead of rest; the stance then sweeps to 30% behind it.
-        const lead = moving ? this.stride * 0.3 : 0;
+        // Land ahead of rest by half the stance, so the stance sweeps evenly either side of it.
+        const lead = moving ? this.stride * (1 - swingShare) / 2 : 0;
         const f = moving ? { x: Math.cos(this.heading), y: Math.sin(this.heading) } : { x: 0, y: 0 };
         const target = {
           x: rest.x + vx * remaining + f.x * lead,
@@ -552,7 +573,10 @@ export class Body {
         }
         const fs = this.forward(leg.def.seg);
         leg.advance(dt, target, { x: -fs.y * leg.def.side, y: fs.x * leg.def.side });
-        if (!leg.swinging) this.footfalls.push({ x: leg.foot.x, y: leg.foot.y, leg });
+        if (!leg.swinging) {
+          leg.toe = this.toeAngle(leg);
+          this.footfalls.push({ x: leg.foot.x, y: leg.foot.y, leg });
+        }
       }
 
       // Never let a foot be dragged beyond physical reach; in a sprint it slides first.
@@ -571,6 +595,14 @@ export class Body {
    * Has the body swung over this planted foot (after a sharp turn, or the flex of a
    * sprint), leaving it underneath or folded up against the hip? Then it needs a step.
    */
+  /** The way a foot's toes point as it is set down: forefeet forward-out, hind feet out-back. */
+  toeAngle(leg: Leg) {
+    const f = this.forward(leg.def.seg), side = leg.def.side;
+    const out = Math.atan2(f.x * side, -f.y * side);
+    const along = leg.def.front ? Math.atan2(f.y, f.x) : Math.atan2(-f.y, -f.x);
+    return out + angleDiff(out, along) * (leg.def.front ? 0.5 : 0.35);
+  }
+
   private underfoot(leg: Leg, hip: Pt) {
     const f = this.forward(leg.def.seg);
     const dx = leg.foot.x - hip.x, dy = leg.foot.y - hip.y;

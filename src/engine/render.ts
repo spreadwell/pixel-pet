@@ -24,6 +24,8 @@ import type { Palette } from './palette';
  */
 
 interface LegPixel { x: number; y: number; c: string; lift: number; z: number; }
+/** A leg's joints last drawn, in whole pixels: hip, knee, foot. */
+type Snapped = [number, number, number, number, number, number];
 type Project = (x: number, y: number, z: number) => { x: number; y: number };
 
 
@@ -63,6 +65,17 @@ export class GeckoRenderer {
   /** Which side of the spine (+1 = animal's left) faces the light. Switches with hysteresis. */
   private lit: 1 | -1 = 1;
   private bend = new Float32Array(SPINE);
+  /**
+   * Draw each leg from whole-pixel joints that only move once the real joint has clearly
+   * moved, with clean one-pixel lines between them. Otherwise a one-pixel line between
+   * joints moving by fractions of a pixel re-rasterises every frame and its pixels
+   * shimmer, which makes the legs look like they wriggle even when the motion is smooth.
+   */
+  stableLegs = true;
+  /** Keep a planted foot's toes where they were set down, instead of turning with the body. */
+  lockToes = true;
+  private snapped = new Map<Leg, Snapped>();
+  private snappedShadow = new Map<Leg, Snapped>();
 
   draw(ctx: CanvasRenderingContext2D, b: Body, pal: Palette) {
     // The left-hand normal of the body; flip which side is lit only once it clearly
@@ -76,7 +89,7 @@ export class GeckoRenderer {
 
     this.frame(b, project);
     this.rasteriseBody(b, project);
-    const legs = this.legPixels(b, pal, project);
+    const legs = this.legPixels(b, pal, project, this.snapped);
 
     // The shadow: the body at its true size on the ground, each part offset by its height.
     const { bw, bh, bx, by } = this;
@@ -98,7 +111,7 @@ export class GeckoRenderer {
       const q = project(p.x + o, p.y + o, g);
       disc(q.x, q.y, halfWidth(i) * b.breathScale(i) * b.squeeze[i] * (1 + NEARER * g), (x, y) => mark(x, y));
     }
-    for (const p of this.legPixels(b, pal, flat)) {
+    for (const p of this.legPixels(b, pal, flat, this.snappedShadow)) {
       const o = castShadow(b, p.z, p.x, p.y);
       const q = project(p.x + o, p.y + o, b.ground(p.x + o + 0.5, p.y + o + 0.5));
       mark(Math.floor(q.x), Math.floor(q.y));
@@ -230,13 +243,13 @@ export class GeckoRenderer {
     }
   }
 
-  private legPixels(b: Body, pal: Palette, project: Project): LegPixel[] {
+  private legPixels(b: Body, pal: Palette, project: Project, snaps: Map<Leg, Snapped>): LegPixel[] {
     const out: LegPixel[] = [];
-    for (const leg of b.legs) this.legToPixels(b, leg, pal, out, project);
+    for (const leg of b.legs) this.legToPixels(b, leg, pal, out, project, snaps);
     return out;
   }
 
-  private legToPixels(b: Body, leg: Leg, pal: Palette, out: LegPixel[], project: Project) {
+  private legToPixels(b: Body, leg: Leg, pal: Palette, out: LegPixel[], project: Project, snaps: Map<Leg, Snapped>) {
     const lift = leg.lift;
     const f = b.forward(leg.def.seg);
     const side = leg.def.side;
@@ -245,7 +258,15 @@ export class GeckoRenderer {
     const seen = new Set<number>();
     // Heights: the hip rides with the body, the foot stands on the terrain (or lifts off it).
     const zh = b.z[leg.def.seg], zf = b.footZ(leg), zk = (zh + zf) / 2;
-    const hip = project(leg.hip.x, leg.hip.y, zh), knee = project(leg.knee.x, leg.knee.y, zk), foot = project(leg.foot.x, leg.foot.y, zf);
+    let hip = project(leg.hip.x, leg.hip.y, zh), knee = project(leg.knee.x, leg.knee.y, zk), foot = project(leg.foot.x, leg.foot.y, zf);
+    if (this.stableLegs) {
+      // Hold each joint's pixel until the real joint is clearly over the next one.
+      const prev = snaps.get(leg);
+      const hold = (v: number, k: number) => (prev && Math.abs(v - (prev[k] + 0.5)) < 0.9 ? prev[k] : Math.floor(v));
+      const s: Snapped = [hold(hip.x, 0), hold(hip.y, 1), hold(knee.x, 2), hold(knee.y, 3), hold(foot.x, 4), hold(foot.y, 5)];
+      snaps.set(leg, s);
+      hip = { x: s[0] + 0.5, y: s[1] + 0.5 }; knee = { x: s[2] + 0.5, y: s[3] + 0.5 }; foot = { x: s[4] + 0.5, y: s[5] + 0.5 };
+    }
     const put = (x: number, y: number, l: number, z: number) => {
       const ix = Math.floor(x), iy = Math.floor(y);
       const key = iy * 100003 + ix;
@@ -254,6 +275,23 @@ export class GeckoRenderer {
       out.push({ x: ix, y: iy, c, lift: l, z });
     };
     const line = (ax: number, ay: number, cx: number, cy: number, l0: number, l1: number, z0: number, z1: number) => {
+      if (this.stableLegs) {
+        // A clean one-pixel step line between whole-pixel joints (Bresenham).
+        let x = Math.floor(ax), y = Math.floor(ay);
+        const x1 = Math.floor(cx), y1 = Math.floor(cy);
+        const dx = Math.abs(x1 - x), dy = -Math.abs(y1 - y), sx = x < x1 ? 1 : -1, sy = y < y1 ? 1 : -1;
+        const n = Math.max(dx, -dy) || 1;
+        let err = dx + dy, i = 0;
+        for (;;) {
+          const u = i++ / n;
+          put(x, y, l0 + (l1 - l0) * u, z0 + (z1 - z0) * u);
+          if (x === x1 && y === y1) break;
+          const e2 = 2 * err;
+          if (e2 >= dy) { err += dy; x += sx; }
+          if (e2 <= dx) { err += dx; y += sy; }
+        }
+        return;
+      }
       const n = Math.max(1, Math.ceil(Math.hypot(cx - ax, cy - ay) * 2));
       for (let s = 0; s <= n; s++) {
         const u = s / n;
@@ -265,7 +303,7 @@ export class GeckoRenderer {
     if (lift > 0.25) return;
     // A planted foot spreads two claws: forefeet point forward-out, hind feet out-back.
     const fwdBias = leg.def.front ? Math.atan2(f.y, f.x) : Math.atan2(-f.y, -f.x);
-    const dir = blendAngle(Math.atan2(oy, ox), fwdBias, leg.def.front ? 0.5 : 0.35);
+    const dir = this.lockToes ? leg.toe : blendAngle(Math.atan2(oy, ox), fwdBias, leg.def.front ? 0.5 : 0.35);
     for (const spread of [-0.75, 0.75]) {
       put(foot.x + Math.cos(dir + spread) * 1.2, foot.y + Math.sin(dir + spread) * 1.2, 0, zf);
     }
