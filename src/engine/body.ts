@@ -247,10 +247,15 @@ export class Body {
 
   /**
    * Where a point at height `z` is drawn: lifted up the screen, and spread out from the
-   * middle of the body because it is nearer the camera.
+   * middle of the body because it is nearer the camera. Both count only the height above
+   * the ground directly beneath, since the interface itself is drawn flat: standing on a
+   * panel it sits flush on it, and only what hangs out over a drop (or is held) rises.
    */
+  /** How much bigger something at (x, y) and height `z` is drawn: by its height above the ground there. */
+  nearness(x: number, y: number, z: number) { return 1 + NEARER * Math.max(0, z - this.ground(x, y)); }
+
   project(x: number, y: number, z: number) {
-    const c = this.pts[12], h = Math.max(0, z), s = 1 + NEARER * h;
+    const c = this.pts[12], h = Math.max(0, z - this.ground(x, y)), s = 1 + NEARER * h;
     return { x: c.x + (x - c.x) * s, y: c.y + (y - c.y) * s - LIFT * h };
   }
 

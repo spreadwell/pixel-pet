@@ -1,4 +1,4 @@
-import { Body, Leg, NEARER, SPINE, halfWidth } from './body';
+import { Body, Leg, SPINE, halfWidth } from './body';
 import type { Palette } from './palette';
 
 /*
@@ -145,7 +145,7 @@ export class GeckoRenderer {
       const f = b.forward(i);
       const z = b.z[i];
       const { x: cx, y: cy } = project(sp.x, sp.y, z);
-      const r = halfWidth(i) * b.breathScale(i) * b.squeeze[i] * (1 + NEARER * Math.max(0, z));
+      const r = halfWidth(i) * b.breathScale(i) * b.squeeze[i] * b.nearness(sp.x, sp.y, z);
       disc(cx, cy, r, (x, y, dx, dy, d2) => {
         const lx = x - this.bx, ly = y - this.by;
         if (lx < 0 || ly < 0 || lx >= this.bw || ly >= this.bh) return;
@@ -189,7 +189,7 @@ export class GeckoRenderer {
       return { x: Math.floor(q.x), y: Math.floor(q.y) };
     };
     const px = (p: { x: number; y: number }, c: string) => { ctx.fillStyle = c; ctx.fillRect(p.x, p.y, 1, 1); };
-    const s0 = 1 + NEARER * Math.max(0, b.z[0]);
+    const s0 = b.nearness(b.pts[0].x, b.pts[0].y, b.z[0]);
 
     // One dark pixel per eye, on the sides of the skull; closed, it reads as shade.
     for (const side of [1, -1]) {
