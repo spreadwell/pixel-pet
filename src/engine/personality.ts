@@ -822,7 +822,8 @@ export class Personality {
     const slow = clamp(1 - this.currentSpeed / (this.speed || 1), 0, 1);
     return {
       heading: this.angle,
-      speed: this.currentSpeed * 60,
+      // The prototype's speeds suit its longer legs; this body covers ground in shorter strides.
+      speed: this.currentSpeed * 60 * 0.65,
       accel: 2400,
       turnRate: 24,
       look: this.angle + this.headLook.offset * slow,

@@ -17,7 +17,7 @@ import { TAU, angleDiff, approach, approachAngle, clamp, lerp, noise1, rand } fr
 export const SPINE = 36;
 export const NECK = 6;
 const SEG = 1;
-const STRIDE = 7;
+
 const SWING_FRACTION = 0.4;
 
 // Half-width profile, snout → tail tip. Leopard geckos carry a fat, banded tail.
@@ -53,12 +53,16 @@ interface LegDef {
   l1: number; l2: number; restFwd: number; restOut: number; phase: number;
 }
 
+// Rest spots sit well inside each leg's reach, so a full stride either side of rest
+// (±0.3 stride) never over-extends the limb.
 const LEGS: LegDef[] = [
-  { seg: 9, side: -1, front: true, l1: 2.9, l2: 2.7, restFwd: 2.2, restOut: 4.3, phase: 0 },
-  { seg: 9, side: 1, front: true, l1: 2.9, l2: 2.7, restFwd: 2.2, restOut: 4.3, phase: 0.5 },
-  { seg: 19, side: -1, front: false, l1: 3.2, l2: 3.0, restFwd: -1.4, restOut: 4.7, phase: 0.5 },
-  { seg: 19, side: 1, front: false, l1: 3.2, l2: 3.0, restFwd: -1.4, restOut: 4.7, phase: 0 },
+  { seg: 9, side: -1, front: true, l1: 3.2, l2: 3.0, restFwd: 1.2, restOut: 3.8, phase: 0 },
+  { seg: 9, side: 1, front: true, l1: 3.2, l2: 3.0, restFwd: 1.2, restOut: 3.8, phase: 0.5 },
+  { seg: 19, side: -1, front: false, l1: 3.5, l2: 3.3, restFwd: -0.8, restOut: 4.2, phase: 0.5 },
+  { seg: 19, side: 1, front: false, l1: 3.5, l2: 3.3, restFwd: -0.8, restOut: 4.2, phase: 0 },
 ];
+const STRIDE_MIN = 5.5;
+const STRIDE_MAX = 8.5;
 
 export class Leg {
   foot: Pt = { x: 0, y: 0 };
@@ -118,6 +122,7 @@ export class Body {
   speed = 0;
   headYaw = 0;
   gaitPhase = 0;
+  stride = STRIDE_MIN;
   legs = LEGS.map((d) => new Leg(d));
   time = rand(0, 100);
 
@@ -196,7 +201,9 @@ export class Body {
     this.heading += clamp(turnErr, -maxTurn * dt, maxTurn * dt);
 
     const ds = this.speed * dt;
-    this.gaitPhase += ds / STRIDE;
+    // Faster means longer strides first (up to what the legs can reach), then quicker ones.
+    this.stride = approach(this.stride, clamp(STRIDE_MIN + this.speed * 0.045, STRIDE_MIN, STRIDE_MAX), 5, dt);
+    this.gaitPhase += ds / this.stride;
     const walking = clamp(this.speed / 10, 0, 1);
     const waveAmp = (0.12 + 0.08 * sNorm) * walking;
     const wave = Math.sin(this.gaitPhase * TAU) * waveAmp;
@@ -307,9 +314,7 @@ export class Body {
     const { seg, side, restFwd, restOut } = leg.def;
     const f = this.forward(seg);
     const ox = -f.y * side, oy = f.x * side;
-    // Feet reach a little further forward when walking briskly.
-    const reach = restFwd + (leg.def.front ? 1 : 0.5) * clamp(this.speed / 60, 0, 1);
-    return { x: hip.x + ox * restOut + f.x * reach, y: hip.y + oy * restOut + f.y * reach };
+    return { x: hip.x + ox * restOut + f.x * restFwd, y: hip.y + oy * restOut + f.y * restFwd };
   }
 
   private placeLegs(init: boolean, dt = 0) {
@@ -329,10 +334,10 @@ export class Body {
 
       if (!leg.swinging) {
         if (moving && leg.rolled(this.gaitPhase)) {
-          const dur = clamp((STRIDE * SWING_FRACTION) / Math.max(this.speed, 1), 0.045, 0.28);
+          const dur = clamp((this.stride * SWING_FRACTION) / Math.max(this.speed, 1), 0.04, 0.28);
           leg.startSwing(dur);
           swingingCount++;
-        } else if (stretch > reach * 1.02 || (!moving && off > 2.4 && swingingCount < 2)) {
+        } else if (stretch > reach * 1.05 || (!moving && off > 2.4 && swingingCount < 2)) {
           leg.startSwing(stretch > reach ? 0.07 : 0.13);
           swingingCount++;
         }
@@ -341,7 +346,8 @@ export class Body {
 
       if (leg.swinging) {
         const remaining = (1 - leg.t) * leg.dur;
-        const lead = moving ? STRIDE * 0.42 : 0;
+        // Land 30% of a stride ahead of rest; the stance then sweeps to 30% behind it.
+        const lead = moving ? this.stride * 0.3 : 0;
         const f = moving ? { x: Math.cos(this.heading), y: Math.sin(this.heading) } : { x: 0, y: 0 };
         const target = {
           x: rest.x + vx * remaining + f.x * lead,
