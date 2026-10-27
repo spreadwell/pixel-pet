@@ -161,7 +161,9 @@ export class PetEngine {
       // Hauling itself up onto something, or running, it lands harder.
       const climbing = this.world.groundAt(f.x, f.y) > b.z[f.leg.def.seg] + 1.5;
       const strength = climbing ? 1.5 : b.speed > 50 ? 1.3 : 1;
-      this.reactions.step(f.x * px, f.y * px, Math.cos(b.heading), Math.sin(b.heading), strength);
+      // The letter under the foot as it is drawn (lifted with the surface it stands on).
+      const q = b.project(f.x, f.y, this.world.groundAt(f.x, f.y));
+      this.reactions.step(q.x * px, q.y * px, Math.cos(b.heading), Math.sin(b.heading), strength);
     }
     b.footfalls.length = 0;
   }

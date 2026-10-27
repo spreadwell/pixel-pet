@@ -451,15 +451,20 @@ const StateHandlers: Record<State, Handler> = {
       if (sd.phase === 'grab' || sd.phase === 'carry' || sd.phase === 'eat') return stealing(g);
       const at = g.letterAt;
       if (!at || (g.typing && sd.phase === 'approach')) { g.dropLetter(); return { targetSpeed: 0.05 * S, transition: STATE.IDLE }; }
-      const d = dist(head.x, head.y, at.x, at.y);
-      const toLetter = Math.atan2(at.y - head.y, at.x - head.x);
+      // Measured from the tip of its snout as drawn (up on a paragraph it is drawn lifted a
+      // little up the screen), so it is the snout that meets the letter, not the whole head.
+      const tip = g.snout();
+      const d = dist(tip.x, tip.y, at.x, at.y);
+      const toLetter = Math.atan2(at.y - tip.y, at.x - tip.x);
       if (sd.phase === 'approach') {
         const wp = g.waypoint(at.x, at.y);
         g.targetAngle = d < 20 * S ? toLetter : Math.atan2(wp.y - head.y, wp.x - head.x);
         const burstPhase = g.burstTimer % 80;
         let targetSpeed = burstPhase < 15 ? 0.15 * S : burstPhase < 55 ? g.speed * 0.8 : 0.3 * S;
+        // Creep the last few pixels, and stop dead with the snout touching it.
         if (d < 20 * S) targetSpeed = Math.min(targetSpeed, 0.3 * S);
-        if (d < 5 * S) { sd.phase = 'taste'; sd.timer = 0; }
+        if (d < 6) targetSpeed = Math.min(targetSpeed, 0.12 * S);
+        if (d < 1.8) { sd.phase = 'taste'; sd.timer = 0; g.currentSpeed = 0; return { targetSpeed: 0 }; }
         if (sd.timer > 1800) { g.dropLetter(); return { targetSpeed, transition: STATE.IDLE }; }
         return { targetSpeed };
       }
