@@ -6,9 +6,11 @@ import { Rect, clamp } from './math';
  * thigmotactic — they keep to edges and crevices — so most wandering goals are chosen
  * along panel seams, the margins of the text column and the gaps between paragraphs.
  *
- * Side panels are cover: the gecko lives on the note and can slip underneath a panel,
- * where it is hidden (the renderer clips it), and peek back out. Text is open ground,
- * which it crosses quickly rather than lingering on. All public geometry is in art px.
+ * The workspace is terrain. Every part of it has a height: the note is the ground,
+ * lines of text are low ridges on it, headings a little taller, the sidebars a ledge,
+ * the tab bar higher still with the tabs as bumps on top. The gecko climbs over all of
+ * it. Side panels are also cover: it can slip underneath one (the renderer clips it)
+ * and peek back out. All public geometry is in art px, heights included.
  */
 
 const SURFACE_SELECTORS = [
@@ -33,6 +35,23 @@ const COVER_SELECTORS: [string, number][] = [
   ['.workspace-split.mod-right-split', 40],
   ['.workspace-drawer', 40],
 ];
+/** How high each part of the interface stands above the note, in art px. */
+const HEIGHT_SELECTORS: [string, number][] = [
+  ['.view-header', 3],
+  ['.status-bar', 4],
+  ['.workspace-split.mod-left-split', 5],
+  ['.workspace-split.mod-right-split', 5],
+  ['.workspace-drawer', 5],
+  ['.workspace-tab-header-container', 6],
+  ['.mobile-navbar', 6],
+  ['.mobile-toolbar', 6],
+  ['.workspace-ribbon', 7],
+  ['.titlebar', 7],
+  ['.workspace-tab-header', 8],
+];
+/** Lines of text are ridges on the note; headings stand a little taller. */
+const TEXT_Z = 2;
+const HEADING_Z = 3;
 /** Where the words are: the editor and reading view. */
 const TEXT_ROOTS = '.cm-content, .markdown-preview-view';
 /** Bounds on the text scan, which runs twice a second. */
@@ -52,6 +71,12 @@ export class World {
   covers: Rect[] = [];
   /** Blocks of text on screen (paragraphs, headings, list runs). */
   text: Rect[] = [];
+  /** High spots worth climbing up to and sitting on: tabs and headings. */
+  perches: Rect[] = [];
+  /** Height of the terrain at each art pixel of the window. */
+  private heights = new Uint8Array(0);
+  private hw = 0;
+  private hh = 0;
   edges: Edge[] = [];
   caret: { x: number; y: number } | null = null;
   /** Regions where the layout changed since the last scan (art px). */
@@ -127,7 +152,8 @@ export class World {
       });
     }
     this.covers = covers;
-    this.scanText();
+    const lines = this.scanText();
+    this.buildHeights(lines);
 
     this.detectShifts(sig);
     this.buildEdges();
@@ -178,8 +204,8 @@ export class World {
     this.prevSignature = sig;
   }
 
-  /** Merge the line boxes of visible text into paragraph-sized blocks. */
-  private scanText() {
+  /** Merge the line boxes of visible text into paragraph-sized blocks. Returns the lines, in art px. */
+  private scanText(): (Rect & { z: number })[] {
     const doc = this.win.document, vh = this.win.innerHeight;
     const roots = Array.from(doc.querySelectorAll<HTMLElement>(TEXT_ROOTS)).filter((r) => !r.parentElement?.closest(TEXT_ROOTS));
     const range = doc.createRange();
@@ -208,30 +234,53 @@ export class World {
       b.x = Math.min(b.x, r.x); b.y = Math.min(b.y, r.y); b.w = x2 - b.x; b.h = y2 - b.y;
     }
     this.text = blocks.map((b) => this.toArt(b)).filter((b) => !this.coverAt(b.x + b.w / 2, b.y + b.h / 2));
+    // Lines much taller than most are headings.
+    const sorted = lines.map((l) => l.h).sort((a, b) => a - b);
+    const typical = sorted[Math.floor(sorted.length / 2)] ?? 0;
+    return lines.map((l) => ({ ...this.toArt(l), z: l.h > typical * 1.3 ? HEADING_Z : TEXT_Z }));
+  }
+
+  /** Rasterise the terrain: interface parts by selector, then the lines of text. */
+  private buildHeights(lines: (Rect & { z: number })[]) {
+    const doc = this.win.document;
+    const w = Math.ceil(this.win.innerWidth / this.px), h = Math.ceil(this.win.innerHeight / this.px);
+    if (w * h !== this.heights.length) this.heights = new Uint8Array(w * h);
+    else this.heights.fill(0);
+    this.hw = w; this.hh = h;
+    const fill = (r: Rect, z: number) => {
+      const x0 = Math.max(0, Math.round(r.x)), x1 = Math.min(w, Math.round(r.x + r.w));
+      const y0 = Math.max(0, Math.round(r.y)), y1 = Math.min(h, Math.round(r.y + r.h));
+      for (let y = y0; y < y1; y++) for (let x = x0, k = y * w + x0; x < x1; x++, k++) if (this.heights[k] < z) this.heights[k] = z;
+    };
+    const perches: Rect[] = [];
+    for (const [sel, z] of HEIGHT_SELECTORS) {
+      doc.querySelectorAll<HTMLElement>(sel).forEach((el) => {
+        const r = el.getBoundingClientRect();
+        if (r.width <= 2 || r.height <= 2) return;
+        const a = this.toArt(r);
+        fill(a, z);
+        if (sel === '.workspace-tab-header' && a.w > 12) perches.push(a);
+      });
+    }
+    for (const l of lines) {
+      fill(l, l.z);
+      if (l.z === HEADING_Z && l.w > 12) perches.push(l);
+    }
+    this.perches = perches;
+  }
+
+  /** Terrain height at (x, y). */
+  groundAt(x: number, y: number) {
+    const ix = Math.floor(x), iy = Math.floor(y);
+    return ix < 0 || iy < 0 || ix >= this.hw || iy >= this.hh ? 0 : this.heights[iy * this.hw + ix];
   }
 
   private buildEdges() {
     const edges: Edge[] = [];
-    const push = (x1: number, y1: number, x2: number, y2: number, inX: number, inY: number) => {
+    const add = (x1: number, y1: number, x2: number, y2: number, inX: number, inY: number) => {
       const len = Math.hypot(x2 - x1, y2 - y1);
       if (len < 12) return;
       edges.push({ x1, y1, x2, y2, len, inX, inY });
-    };
-    // Seams inside a panel are out of reach (the gecko is under it, not on it), so a
-    // seam that passes under one is cut into the runs either side.
-    const add = (x1: number, y1: number, x2: number, y2: number, inX: number, inY: number) => {
-      const n = Math.max(1, Math.ceil(Math.hypot(x2 - x1, y2 - y1) / 2));
-      let start = -1;
-      for (let i = 0; i <= n + 1; i++) {
-        const u = Math.min(i, n) / n;
-        const open = i <= n && !this.coverAt(x1 + (x2 - x1) * u, y1 + (y2 - y1) * u);
-        if (open && start < 0) start = i;
-        if (!open && start >= 0) {
-          const a = start / n, b = (i - 1) / n;
-          push(x1 + (x2 - x1) * a, y1 + (y2 - y1) * a, x1 + (x2 - x1) * b, y1 + (y2 - y1) * b, inX, inY);
-          start = -1;
-        }
-      }
     };
     const inset = 3.5;
     for (const r of this.surfaces) {

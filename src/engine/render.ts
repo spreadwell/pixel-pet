@@ -8,9 +8,25 @@ import type { Palette } from './palette';
  * precision into a small depth buffer (one disc per spine point, nearest disc wins), so
  * the silhouette changes pixel-by-pixel as the animal moves instead of jumping as a
  * whole. Each covered pixel remembers which side of the spine it lies on.
+ *
+ * Height shows through the shadow: each pixel casts its shadow down and to the right by
+ * how far it is above the ground beneath it, so where the body bridges a step its
+ * shadow falls away, and a lifted foot's shadow parts from it.
  */
 
-interface LegPixel { x: number; y: number; c: string; lift: number; }
+interface LegPixel { x: number; y: number; c: string; lift: number; z: number; }
+
+/** Shadow offset (art px) for a pixel `h` above the ground. */
+const shadowOffset = (h: number) => 1 + Math.round(Math.min(6, Math.max(0, h * 0.9)));
+
+/**
+ * Where the shadow of a pixel at height `z` lands: measured against the ground where it
+ * falls, not under the pixel, so from the top of a ledge the shadow drops off the edge.
+ */
+function castShadow(b: Body, z: number, x: number, y: number) {
+  const o = shadowOffset(z - b.ground(x + 0.5, y + 0.5));
+  return shadowOffset(z - b.ground(x + o + 0.5, y + o + 0.5));
+}
 
 // Light falls from the upper left of the screen, whichever way the animal faces.
 const LIGHT = { x: -0.6, y: -0.8 };
@@ -39,7 +55,7 @@ export class GeckoRenderer {
 
     // Shadow first (deduplicated so overlaps don't darken).
     const { bw, bh, bx, by } = this;
-    const sw = bw + 4, sh = bh + 4;
+    const sw = bw + 8, sh = bh + 8;
     if (this.shadow.length < sw * sh) this.shadow = new Uint8Array(sw * sh);
     const shadow = this.shadow;
     shadow.fill(0, 0, sw * sh);
@@ -48,10 +64,13 @@ export class GeckoRenderer {
       if (sx >= 0 && sy >= 0 && sx < sw && sy < sh) shadow[sy * sw + sx] = 1;
     };
     for (let y = 0; y < bh; y++) for (let x = 0; x < bw; x++) {
-      if (this.depth[y * bw + x] > 0) mark(bx + x + 1, by + y + 1);
+      const k = y * bw + x;
+      if (this.depth[k] <= 0) continue;
+      const o = castShadow(b, b.z[this.seg[k]], bx + x, by + y);
+      mark(bx + x + o, by + y + o);
     }
     for (const p of legs) {
-      const o = 1 + Math.round(p.lift * 1.6);
+      const o = castShadow(b, p.z, p.x, p.y);
       mark(p.x + o, p.y + o);
     }
     ctx.fillStyle = pal.shadow;
@@ -90,7 +109,7 @@ export class GeckoRenderer {
       const f = b.forward(i);
       const tw = b.tailOffset(i);
       const cx = p.x - f.y * tw, cy = p.y + f.x * tw;
-      const r = halfWidth(i) * b.breathScale(i);
+      const r = halfWidth(i) * b.breathScale(i) * b.squeeze[i];
       const r2 = r * r;
       const x0 = Math.floor(cx - r), x1 = Math.ceil(cx + r);
       const y0 = Math.floor(cy - r), y1 = Math.ceil(cy + r);
@@ -183,28 +202,30 @@ export class GeckoRenderer {
     const ox = -f.y * side, oy = f.x * side;
     const c = side === this.lit ? pal.base : pal.shade;
     const seen = new Set<number>();
-    const put = (x: number, y: number, l: number) => {
+    // Heights: the hip rides with the body, the foot stands on the terrain (or lifts off it).
+    const zh = b.z[leg.def.seg], zf = b.ground(foot.x, foot.y) + lift * 1.5, zk = (zh + zf) / 2;
+    const put = (x: number, y: number, l: number, z: number) => {
       const ix = Math.floor(x), iy = Math.floor(y);
       const key = iy * 100003 + ix;
       if (seen.has(key)) return;
       seen.add(key);
-      out.push({ x: ix, y: iy, c, lift: l });
+      out.push({ x: ix, y: iy, c, lift: l, z });
     };
-    const line = (ax: number, ay: number, cx: number, cy: number, l0: number, l1: number) => {
+    const line = (ax: number, ay: number, cx: number, cy: number, l0: number, l1: number, z0: number, z1: number) => {
       const n = Math.max(1, Math.ceil(Math.hypot(cx - ax, cy - ay) * 2));
       for (let s = 0; s <= n; s++) {
         const u = s / n;
-        put(ax + (cx - ax) * u, ay + (cy - ay) * u, l0 + (l1 - l0) * u);
+        put(ax + (cx - ax) * u, ay + (cy - ay) * u, l0 + (l1 - l0) * u, z0 + (z1 - z0) * u);
       }
     };
-    line(hip.x, hip.y, knee.x, knee.y, 0, lift * 0.5);
-    line(knee.x, knee.y, foot.x, foot.y, lift * 0.5, lift);
+    line(hip.x, hip.y, knee.x, knee.y, 0, lift * 0.5, zh, zk);
+    line(knee.x, knee.y, foot.x, foot.y, lift * 0.5, lift, zk, zf);
     if (lift > 0.25) return;
     // A planted foot spreads two claws: forefeet point forward-out, hind feet out-back.
     const fwdBias = leg.def.front ? Math.atan2(f.y, f.x) : Math.atan2(-f.y, -f.x);
     const dir = blendAngle(Math.atan2(oy, ox), fwdBias, leg.def.front ? 0.5 : 0.35);
     for (const spread of [-0.75, 0.75]) {
-      put(foot.x + Math.cos(dir + spread) * 1.2, foot.y + Math.sin(dir + spread) * 1.2, 0);
+      put(foot.x + Math.cos(dir + spread) * 1.2, foot.y + Math.sin(dir + spread) * 1.2, 0, zf);
     }
   }
 }

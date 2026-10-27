@@ -24,9 +24,11 @@ import type { CoverEntry, World } from './world';
 //   - The stats readout is gone. Hunger and sleepiness only show through behaviour.
 //   - New: scare() for pokes, panels and typing; petting; nibbling a letter; and a nap
 //     when the user is away.
-//   - New: side panels are cover. It slips under them, waits, and peeks back out, and
-//     bolts for one when frightened. A pointer over a panel is above it and unseen.
-//     Text is open ground: it dashes across and stops in the gaps, tasting the words.
+//   - New: the workspace is terrain. It climbs onto the sidebars and tabs and over
+//     your text, and squeezes along the gaps between paragraphs (the Body does the
+//     climbing). Side panels are also cover: it slips under one, waits and peeks back
+//     out, and bolts for one when frightened. While it is under a panel, a pointer or
+//     click on that panel is above it and unseen.
 //
 // Sections: TRAIT SYSTEM · NEEDS · SUB-BEHAVIOURS · STATE HANDLERS · PERSONALITY
 // Distances are multiples of S (the original's body scale, here in art px) and times
@@ -293,9 +295,7 @@ const StateHandlers: Record<State, Handler> = {
         targetSpeed = g.speed * 0.7;
         sd.wallFollowTimer--;
         if (sd.wallFollowTimer % 30 === 0) g.flick();
-        // A seam that runs on under a panel is where the run ends.
-        const ahead = g.c.world.coverAt(head.x + Math.cos(sd.wallAngle) * 8, head.y + Math.sin(sd.wallAngle) * 8);
-        if (sd.wallFollowTimer <= 0 || d < 15 * S || ahead) sd.wallFollowing = false;
+        if (sd.wallFollowTimer <= 0 || d < 15 * S) sd.wallFollowing = false;
       } else if (!sd.investigating) {
         g.targetAngle = Math.atan2(g.destY - head.y, g.destX - head.x);
         // The explore rhythm: hesitate, dash, slow — over and over.
@@ -303,8 +303,6 @@ const StateHandlers: Record<State, Handler> = {
         if (burstPhase < 15) targetSpeed = 0.15 * S;
         else if (burstPhase < 55) targetSpeed = g.speed;
         else targetSpeed = 0.3 * S;
-        // Text is open ground: no dawdling until it's back in a gap or margin.
-        if (g.c.world.onText(head.x, head.y)) targetSpeed = Math.max(targetSpeed, g.speed);
         g.targetAngle += Math.sin(g.burstTimer * 0.08) * 0.15;
 
         if (d < 15 * S) {
@@ -335,7 +333,7 @@ const StateHandlers: Record<State, Handler> = {
           return { targetSpeed, transition: STATE.BASKING };
         }
       }
-      if (!g.entering) g.steerFromWalls(25 * S, 0.3);
+      if (!g.entering) g.steerFromWalls(25 * S, 0.3, !sd.wallFollowing);
       return { targetSpeed };
     },
   },
@@ -494,6 +492,7 @@ const StateHandlers: Record<State, Handler> = {
           return { targetSpeed };
         }
         case 'slip': {
+          g.body.under = true;
           g.targetAngle = Math.atan2(e.y + e.ny * e.depth - head.y, e.x + e.nx * e.depth - head.x);
           const targetSpeed = g.hideFast ? g.speed * g.traits.resolve('fleeMultiplier') : g.speed * 0.8;
           if (depth > e.depth - 4) {
@@ -607,8 +606,8 @@ export class Personality {
   }
 
   get body() { return this.c.body; }
-  /** The pointer, unless it's over a panel: then it's above the gecko and out of sight. */
-  get pointer() { const p = this.c.pointer; return p && !this.c.world.coverAt(p.x, p.y) ? p : null; }
+  /** The pointer, unless the gecko is under a panel and the pointer is on top of it. */
+  get pointer() { const p = this.c.pointer; return p && !(this.body.under && this.c.world.coverAt(p.x, p.y)) ? p : null; }
 
   /** Wary geckos like to get under things. */
   wantsCover() {
@@ -630,7 +629,7 @@ export class Personality {
 
   enterState(state: State) {
     // Coming to rest under a panel (after a dash, say) is hiding: it will peek out.
-    if ((state === STATE.IDLE || state === STATE.BASKING) && this.c.world.coverAt(this.head.x, this.head.y) && this.findCover(200)) {
+    if ((state === STATE.IDLE || state === STATE.BASKING) && this.body.under && this.c.world.coverAt(this.head.x, this.head.y) && this.findCover(200)) {
       state = STATE.HIDE;
       this.hideFast = false;
     }
@@ -638,7 +637,7 @@ export class Personality {
     this.stateTimer = 0;
     this.stateData = {};
     StateHandlers[state].enter(this);
-    if (state === STATE.HIDE && this.c.world.coverAt(this.head.x, this.head.y) && this.stateData.phase === 'approach') {
+    if (state === STATE.HIDE && this.body.under && this.c.world.coverAt(this.head.x, this.head.y) && this.stateData.phase === 'approach') {
       this.stateData.phase = 'under';
       this.stateData.wait = 60 + Math.random() * 120;
     }
@@ -661,7 +660,7 @@ export class Personality {
     }
     const b = this.c.world.bounds;
     out.push({ x: b.x + 16, y: b.y + b.h - 16 }, { x: b.x + b.w - 16, y: b.y + b.h - 16 });
-    return out.filter((p) => this.c.world.inBounds(p.x, p.y, 8) && !this.c.world.coverAt(p.x, p.y));
+    return out.filter((p) => this.c.world.inBounds(p.x, p.y, 8));
   }
 
   nearestSeam(within: number) {
@@ -676,13 +675,18 @@ export class Personality {
     return best;
   }
 
-  /** Turn back from the window edges, the shortest way round. */
-  steerFromWalls(margin: number, rate: number) {
+  /**
+   * Turn back from the window edges, the shortest way round — unless it is heading for
+   * somewhere up against that edge on purpose (a tab, say).
+   */
+  steerFromWalls(margin: number, rate: number, toDest = false) {
     const h = this.head, b = this.c.world.bounds;
-    if (h.x < b.x + margin) this.targetAngle = lerpAngle(this.targetAngle, 0, rate);
-    else if (h.x > b.x + b.w - margin) this.targetAngle = lerpAngle(this.targetAngle, Math.PI, rate);
-    if (h.y < b.y + margin) this.targetAngle = lerpAngle(this.targetAngle, Math.PI / 2, rate);
-    else if (h.y > b.y + b.h - margin) this.targetAngle = lerpAngle(this.targetAngle, -Math.PI / 2, rate);
+    const m = margin + 4;
+    const ok = (near: boolean) => !(toDest && near);
+    if (h.x < b.x + margin && ok(this.destX < b.x + m)) this.targetAngle = lerpAngle(this.targetAngle, 0, rate);
+    else if (h.x > b.x + b.w - margin && ok(this.destX > b.x + b.w - m)) this.targetAngle = lerpAngle(this.targetAngle, Math.PI, rate);
+    if (h.y < b.y + margin && ok(this.destY < b.y + m)) this.targetAngle = lerpAngle(this.targetAngle, Math.PI / 2, rate);
+    else if (h.y > b.y + b.h - margin && ok(this.destY > b.y + b.h - m)) this.targetAngle = lerpAngle(this.targetAngle, -Math.PI / 2, rate);
   }
 
   pickDestination() {
@@ -691,11 +695,7 @@ export class Personality {
     if (this.needs.wantsSleepSoon() || this.forcedNap) { set(this.homeX, this.homeY); return; }
     const f = this.needs.fullness;
     const homeUrge = f > 0.9 ? 0.95 : f > 0.5 ? (f - 0.5) * 0.6 : 0;
-    if (homeUrge > 0 && Math.random() < homeUrge) {
-      const q = w.clampToBounds(this.homeX + (Math.random() - 0.5) * 22, this.homeY + (Math.random() - 0.5) * 22, 12);
-      if (w.coverAt(q.x, q.y)) set(this.homeX, this.homeY); else set(q.x, q.y);
-      return;
-    }
+    if (homeUrge > 0 && Math.random() < homeUrge) { set(this.homeX + (Math.random() - 0.5) * 22, this.homeY + (Math.random() - 0.5) * 22); return; }
     // Destinations stay within a few body lengths: a workspace is far bigger, in lizard
     // terms, than the prototype's canvas was.
     const h = this.head;
@@ -705,6 +705,15 @@ export class Personality {
       for (const t of items) { k -= weight(t); if (k <= 0) return t; }
       return items[0];
     };
+    // Now and then, climb up onto something: a tab, or a heading.
+    if (w.perches.length && Math.random() < 0.12) {
+      const p = weighted(w.perches, (r) => near(r.x + r.w / 2, r.y + r.h / 2));
+      if (p && dist(h.x, h.y, p.x + p.w / 2, p.y + p.h / 2) < 190) {
+        const q = w.clampToBounds(p.x + p.w * (0.25 + Math.random() * 0.5), p.y + p.h / 2, 4);
+        this.destX = q.x; this.destY = q.y;
+        return;
+      }
+    }
     for (let attempt = 0; attempt < 12; attempt++) {
       const r = Math.random();
       let x: number, y: number;
@@ -721,9 +730,11 @@ export class Personality {
         x = h.x + Math.cos(a) * d; y = h.y + Math.sin(a) * d;
       }
       if (dist(h.x, h.y, x, y) > 190 || dist(h.x, h.y, x, y) < 12) continue;
-      // Stopping places are out in the open: not under a panel, not on the words.
+      // Anywhere goes, the sidebars and tabs included; it sits on your words only now and then.
       ({ x, y } = w.clampToBounds(x, y, 12));
-      if (w.coverAt(x, y) || w.onText(x, y, 3)) continue;
+      if (w.onText(x, y, 3) && Math.random() < 0.75) continue;
+      // The note is home ground; up on a panel is an excursion.
+      if (w.groundAt(x, y) >= 5 && Math.random() < 0.65) continue;
       // Leave the place you're typing alone.
       if (this.typing && w.caret && dist(x, y, w.caret.x, w.caret.y) < 45) continue;
       set(x, y);
@@ -849,8 +860,8 @@ export class Personality {
     const c = this.c, px = c.world.px;
     for (const p of c.input.presses.splice(0)) {
       const x = p.x / px, y = p.y / px;
-      // A click on a panel lands on the panel, not on whatever is underneath.
-      if (c.world.coverAt(x, y)) continue;
+      // A click on a panel it is hiding under lands on the panel, not on the gecko.
+      if (this.body.under && c.world.coverAt(x, y)) continue;
       for (const bug of c.swarm.bugs) if (dist(bug.x, bug.y, x, y) < 6) bug.startle(x, y);
       if (this.bodyDistance(x, y) < 3) { this.scare(x, y); return; }
     }
@@ -904,7 +915,7 @@ export class Personality {
     this.typing = c.input.typedWithin(c.now, 3500);
     this.userIdle = c.input.idleFor(c.now) > c.opts.sleepAfterMs;
     if (this.entering && c.world.inBounds(this.head.x, this.head.y, 6)) this.entering = false;
-    if (!c.world.inBounds(this.homeX, this.homeY, 8) || c.world.coverAt(this.homeX, this.homeY)) this.chooseHome();
+    if (!c.world.inBounds(this.homeX, this.homeY, 8)) this.chooseHome();
 
     this.needs.update(this.state);
     this.color.update(this.state, this.petted);

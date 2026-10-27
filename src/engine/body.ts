@@ -12,6 +12,12 @@ import { TAU, angleDiff, approach, approachAngle, clamp, lerp, noise1, rand } fr
  * Gait phase advances with distance travelled, never with time, so planted feet never
  * slide. Diagonal pairs (trot) swing together; a leg that is over-stretched or badly
  * placed after a turn takes a quick corrective step.
+ *
+ * The ground has height (see World.groundAt). Each spine point takes the height of the
+ * terrain under it, and the body drapes over steps like a rope, never steeper than
+ * DRAPE_SLOPE: points beside a ledge lift off the low side and bridge up to the top.
+ * Spacing between points is kept in 3D, so where the body is steep it bunches up as
+ * seen from above. Climbing slows it down; in a narrow gap it squeezes thinner.
  */
 
 export const SPINE = 36;
@@ -72,6 +78,10 @@ const STRIDE_MAX = 8.5;
 /** A limb stretched past this fraction of its length looks locked straight. */
 const COMFORT = 0.9;
 const MAX_STEP_HZ = 8;
+/** Steepest the body drapes over a step: height change per art px of spine. */
+const DRAPE_SLOPE = 0.8;
+/** Horizontal length of one spine segment that rises `dz`. */
+const segH = (dz: number) => Math.sqrt(Math.max(0.5, SEG * SEG - dz * dz));
 
 export class Leg {
   foot: Pt = { x: 0, y: 0 };
@@ -163,6 +173,21 @@ export class Body {
   /** Path-following spine (without flexion); `pts` is what is drawn. */
   private path: Pt[] = [];
 
+  /** Height of each spine point above the note. */
+  z: number[] = new Array(SPINE).fill(0);
+  /** Width factor per spine point: below 1 while squeezing through a gap. */
+  squeeze: number[] = new Array(SPINE).fill(1);
+  /** Terrain height at (x, y); flat unless the engine supplies the workspace's. */
+  ground: (x: number, y: number) => number = () => 0;
+  /** Crawling under a panel rather than over the terrain. */
+  under = false;
+  /** Speed factor from the slope ahead: below 1 climbing up, a little below going down. */
+  private climb = 1;
+  /** A pause at the foot of a ledge before scrambling up it; re-armed once clear of it. */
+  private ledgePause = 0;
+  private ledgeArmed = true;
+  private zDrape: number[] = new Array(SPINE).fill(0);
+
   /** Lateral wiggle of head yaw while idle, for life. */
   private idleSeed = Math.floor(rand(0, 1000));
 
@@ -213,7 +238,15 @@ export class Body {
     const maxTurn = drive.turnRate * (1 - 0.55 * sNorm) * (this.speed > 1 ? 1 : 0.35);
     this.heading += clamp(turnErr, -maxTurn * dt, maxTurn * dt);
 
-    const ds = this.speed * dt;
+    // A step up ahead slows it to a scramble; going down it picks its way a little.
+    const n = this.pts[NECK];
+    const rise = this.ground(n.x + Math.cos(this.heading) * 3, n.y + Math.sin(this.heading) * 3) - this.z[NECK];
+    if (rise > 2.5 && this.speed > 3 && this.speed < 60) {
+      if (this.ledgeArmed) { this.ledgePause = rand(0.25, 0.5); this.ledgeArmed = false; }
+    } else if (rise < 1) this.ledgeArmed = true;
+    this.ledgePause -= dt;
+    this.climb = approach(this.climb, this.ledgePause > 0 ? 0.05 : rise > 0.5 ? 0.45 : rise < -0.5 ? 0.8 : 1, 6, dt);
+    const ds = this.speed * dt * this.climb;
     // Faster means longer strides first (up to what the legs can reach), then quicker ones.
     this.stride = approach(this.stride, clamp(STRIDE_MIN + this.speed * 0.05, STRIDE_MIN, STRIDE_MAX), 5, dt);
     // Above ~8 steps a second legs only flicker on screen, so a sprint skitters instead.
@@ -223,7 +256,6 @@ export class Body {
     const waveAmp = (0.12 + 0.08 * sNorm) * walking;
     const wave = Math.sin(this.gaitPhase * TAU) * waveAmp;
 
-    const n = this.pts[NECK];
     n.x += Math.cos(this.heading + wave) * ds;
     n.y += Math.sin(this.heading + wave) * ds;
 
@@ -234,10 +266,12 @@ export class Body {
     this.headYaw = approachAngle(this.headYaw, yawTarget - wave * 0.6, this.speed > 20 ? 14 : 9, dt);
 
     const ha = this.headAngle;
+    let reach = 0;
     for (let k = 1; k <= NECK; k++) {
       const p = this.pts[NECK - k];
-      p.x = n.x + Math.cos(ha) * k * SEG;
-      p.y = n.y + Math.sin(ha) * k * SEG;
+      reach += segH(this.z[NECK - k] - this.z[NECK - k + 1]);
+      p.x = n.x + Math.cos(ha) * reach;
+      p.y = n.y + Math.sin(ha) * reach;
     }
 
     // ── Trunk and tail follow with stiffness ────────────────
@@ -256,8 +290,9 @@ export class Body {
       }
       d = clamp(d, -maxB, maxB);
       ang = prevAng + d;
-      p.x = a.x + Math.cos(ang) * SEG;
-      p.y = a.y + Math.sin(ang) * SEG;
+      const len = segH(this.z[i] - this.z[i - 1]);
+      p.x = a.x + Math.cos(ang) * len;
+      p.y = a.y + Math.sin(ang) * len;
       prevAng = ang;
     }
 
@@ -278,6 +313,8 @@ export class Body {
       this.pts[i].y = p.y - (fx / fl) * off;
     }
 
+    this.drape(dt);
+
     // ── Legs ────────────────────────────────────────────────
     this.placeLegs(false, dt);
 
@@ -289,6 +326,30 @@ export class Body {
     if (this.tongue) {
       this.tongue.t += dt / (this.tongue.kind === 'flick' ? 0.22 : 0.42);
       if (this.tongue.t >= 1) this.tongue = null;
+    }
+  }
+
+  /** Heights along the spine: terrain under each point, draped over steps, eased in time. */
+  private drape(dt: number) {
+    const zt = this.zDrape;
+    for (let i = 0; i < SPINE; i++) zt[i] = this.ground(this.pts[i].x, this.pts[i].y);
+    for (let pass = 0; pass < 2; pass++) {
+      for (let i = 1; i < SPINE; i++) zt[i] = Math.max(zt[i], zt[i - 1] - DRAPE_SLOPE);
+      for (let i = SPINE - 2; i >= 0; i--) zt[i] = Math.max(zt[i], zt[i + 1] - DRAPE_SLOPE);
+    }
+    for (let i = 0; i < SPINE; i++) {
+      this.z[i] = approach(this.z[i], zt[i], 25, dt);
+      // Squeezing: how much room is there either side before the ground rises?
+      let target = 1;
+      if (!this.under) {
+        const p = this.pts[i], f = this.forward(i), lx = -f.y, ly = f.x;
+        const room = (side: number) => {
+          for (let d = 0.5; d <= 6; d += 0.5) if (this.ground(p.x + lx * side * d, p.y + ly * side * d) > this.z[i] + 0.8) return d;
+          return 6;
+        };
+        target = clamp((room(1) + room(-1) - 1) / (2 * halfWidth(i) + 5), 0.65, 1);
+      }
+      this.squeeze[i] = approach(this.squeeze[i], target, 10, dt);
     }
   }
 

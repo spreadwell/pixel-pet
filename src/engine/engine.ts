@@ -74,6 +74,9 @@ export class PetEngine {
     const b = this.world.bounds;
     if (at) this.body = new Body(at.x / this.opts.px, at.y / this.opts.px, at.heading);
     else this.body = new Body(b.x - 14, b.y + clamp(rand(0.35, 0.7) * b.h, 20, b.h - 20), 0);
+    // Over the terrain, unless it has crept under a panel: under there it is on the note.
+    const body = this.body, world = this.world;
+    body.ground = (x, y) => (body.under && world.coverAt(x, y) ? 0 : world.groundAt(x, y));
     this.c = {
       body: this.body, world: this.world, input: this.input, swarm: this.swarm, nibbler: this.nibbler,
       particles: this.particles, pal: this.pals[0], opts: this.opts, now: performance.now(), pointer: null, pointerSpeed: 0,
@@ -185,6 +188,8 @@ export class PetEngine {
 
     const drive = this.brain.update();
     this.body.update(TICK, drive);
+    // Once it is all the way out from under a panel, it is back on top of things.
+    if (this.body.under && this.brain.state !== STATE.HIDE && !this.body.pts.some((p) => this.world.coverAt(p.x, p.y))) this.body.under = false;
 
     if (!this.brain.entering) {
       const n = this.body.neck;
@@ -203,7 +208,7 @@ export class PetEngine {
     const pal = this.pals[Math.round(this.brain.color.warmth * 2)];
     for (const b of this.swarm.bugs) if (b.z < 1) b.draw(g, pal, this.frame);
     // Side panels lie over the note: whatever part of the gecko has crept under one is hidden.
-    const covers = this.world.covers;
+    const covers = this.body.under ? this.world.covers : [];
     if (covers.length) {
       g.save();
       g.beginPath();
