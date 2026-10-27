@@ -15,6 +15,8 @@ export interface PetOptions extends BrainOptions {
   px: number;
   /** Any CSS colour expression, e.g. 'var(--interactive-accent)'. */
   color: string;
+  /** How much finer than art px the gecko is drawn (1.5 = half as many pixels again each way). */
+  detail?: number;
   /** Frame-rate cap (0 = display rate). */
   maxFps?: number;
   debug?: boolean;
@@ -190,13 +192,19 @@ export class PetEngine {
     this.render();
   }
 
+  /** Canvas pixels per art px: the gecko is drawn this much finer than it is simulated. */
+  private res = 1;
+
   private resize() {
-    const px = this.opts.px;
-    const w = Math.ceil(this.win.innerWidth / px), h = Math.ceil(this.win.innerHeight / px);
+    const px = this.opts.px, dpr = this.win.devicePixelRatio || 1;
+    // Each canvas pixel is a whole number of device pixels, so the art stays crisp.
+    const cpx = Math.max(1, Math.round((px / (this.opts.detail ?? 1.5)) * dpr)) / dpr;
+    this.res = px / cpx;
+    const w = Math.ceil(this.win.innerWidth / cpx), h = Math.ceil(this.win.innerHeight / cpx);
     this.canvas.width = w;
     this.canvas.height = h;
-    this.canvas.style.width = `${w * px}px`;
-    this.canvas.style.height = `${h * px}px`;
+    this.canvas.style.width = `${w * cpx}px`;
+    this.canvas.style.height = `${h * cpx}px`;
     this.ctx2d.imageSmoothingEnabled = false;
   }
 
@@ -260,27 +268,30 @@ export class PetEngine {
     this.frame++;
     g.clearRect(0, 0, this.canvas.width, this.canvas.height);
     const pal = this.pals[Math.round(this.brain.color.warmth * 2)];
-    for (const b of this.swarm.bugs) if (b.z < 1) b.draw(g, pal, this.frame);
+    const res = this.res;
+    for (const b of this.swarm.bugs) if (b.z < 1) b.draw(g, pal, this.frame, res);
     // Side panels lie over the note: whatever part of the gecko has crept under one is hidden.
     const covers = this.body.under ? this.world.covers : [];
     if (covers.length) {
       g.save();
       g.beginPath();
       g.rect(0, 0, this.canvas.width, this.canvas.height);
-      for (const c of covers) g.rect(Math.round(c.x), Math.round(c.y), Math.round(c.w), Math.round(c.h));
+      for (const c of covers) g.rect(Math.round(c.x * res), Math.round(c.y * res), Math.round(c.w * res), Math.round(c.h * res));
       g.clip('evenodd');
     }
-    this.renderer.draw(g, this.body, pal);
+    this.renderer.draw(g, this.body, pal, res);
     if (this.brain.carrying) {
       const s = this.brain.snout(), px = this.opts.px;
       this.reactions.hold((s.x + 0.5) * px, (s.y + 0.5) * px, this.body.headAngle);
     }
     this.reactions.draw(this.nibbler.ghosts(performance.now()));
     if (covers.length) g.restore();
-    for (const b of this.swarm.bugs) if (b.z >= 1) b.draw(g, pal, this.frame);
-    this.particles.draw(g);
+    for (const b of this.swarm.bugs) if (b.z >= 1) b.draw(g, pal, this.frame, res);
+    this.particles.draw(g, res);
 
     if (this.opts.debug) {
+      g.save();
+      g.scale(res, res);
       const br = this.brain;
       g.fillStyle = 'rgba(255,0,80,0.8)';
       g.fillRect(Math.floor(br.destX), Math.floor(br.destY), 2, 2);
@@ -291,6 +302,7 @@ export class PetEngine {
         const n = Math.ceil(e.len / 4);
         for (let i = 0; i <= n; i++) g.fillRect(Math.floor(e.x1 + ((e.x2 - e.x1) * i) / n), Math.floor(e.y1 + ((e.y2 - e.y1) * i) / n), 1, 1);
       }
+      g.restore();
     }
   }
 }

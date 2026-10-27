@@ -204,6 +204,8 @@ export class Body {
   ground: (x: number, y: number) => number = () => 0;
   /** Crawling under a panel rather than over the terrain. */
   under = false;
+  /** How much the body sways side to side as it walks (trunk flex, path snaking, tail wave). */
+  sway = 1;
   /** Walk in lateral sequence at low speed, blending into the trot. Off: always trot. */
   natural = false;
   /** 0 walking → 1 trotting. */
@@ -343,7 +345,7 @@ export class Body {
     this.skitter = ds / this.stride > MAX_STEP_HZ * dt;
     this.gaitPhase += Math.min(ds / this.stride, MAX_STEP_HZ * dt);
     const walking = clamp(this.speed / 10, 0, 1);
-    const waveAmp = (0.12 + 0.08 * sNorm) * walking;
+    const waveAmp = (0.12 + 0.08 * sNorm) * walking * this.sway;
     const wave = Math.sin(this.gaitPhase * TAU) * waveAmp;
 
     n.x += Math.cos(this.heading + wave) * ds;
@@ -390,7 +392,7 @@ export class Body {
     // while the left fore- and right hind-foot swing.
     // Flex peaks at a brisk walk; flat out, the trunk stiffens so it stays over its feet.
     // The trunk flex is timed to the trot; at a slow sequenced walk it is gentler.
-    this.flexAmp = approach(this.flexAmp, 1.25 * walking * (1 - 0.45 * sNorm) * lerp(0.45, 1, this.trot), 5, dt);
+    this.flexAmp = approach(this.flexAmp, 1.25 * walking * (1 - 0.45 * sNorm) * lerp(0.45, 1, this.trot) * this.sway, 5, dt);
     const s = Math.sin(this.gaitPhase * TAU) * this.flexAmp;
     for (let i = NECK + 1; i < SPINE; i++) {
       const p = path[i];

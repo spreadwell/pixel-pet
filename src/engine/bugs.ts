@@ -142,7 +142,9 @@ export class Bug {
   draw(ctx: CanvasRenderingContext2D, pal: Palette, frame: number, k = 1) {
     const x = this.x, y = this.y;
     const fx = Math.cos(this.heading), fy = Math.sin(this.heading);
-    const px = (ax: number, ay: number, c: string) => { ctx.fillStyle = c; ctx.fillRect(Math.floor(ax * k), Math.floor(ay * k), 1, 1); };
+    // On a finer canvas (k > 1) each art pixel still covers its full scaled size, so the bug looks the same.
+    const s = Math.ceil(k);
+    const px = (ax: number, ay: number, c: string) => { ctx.fillStyle = c; ctx.fillRect(Math.floor(ax * k), Math.floor(ay * k), s, s); };
     const so = 1 + this.z * 0.7;
     ctx.globalAlpha = clamp(1 - this.z / 14, 0.35, 1);
     px(this.x + so, this.y + so, pal.shadow);
@@ -247,7 +249,7 @@ export class Particles {
     for (const p of this.ps) {
       ctx.globalAlpha = clamp(1 - p.life / p.max, 0, 1) * (chance(0.97) ? 1 : 0.5);
       ctx.fillStyle = p.c;
-      ctx.fillRect(Math.floor(p.x * k), Math.floor(p.y * k), 1, 1);
+      ctx.fillRect(Math.floor(p.x * k), Math.floor(p.y * k), Math.ceil(k), Math.ceil(k));
     }
     ctx.globalAlpha = 1;
   }

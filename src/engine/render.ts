@@ -9,6 +9,9 @@ import type { Palette } from './palette';
  * the silhouette changes pixel-by-pixel as the animal moves instead of jumping as a
  * whole. Each covered pixel remembers which side of the spine it lies on.
  *
+ * The animal lives in art px, but can be drawn on a finer grid: `res` canvas pixels per
+ * art px (1.5 draws it with half as many pixels again each way, at the same size).
+ *
  * Height shows four ways, as it would to a camera looking down at a slight angle:
  *   - Lift. Whatever is higher is drawn higher up the screen, the way "up" reads in an
  *     isometric view, so climbing onto something visibly raises it.
@@ -77,19 +80,20 @@ export class GeckoRenderer {
   private snapped = new Map<Leg, Snapped>();
   private snappedShadow = new Map<Leg, Snapped>();
 
-  draw(ctx: CanvasRenderingContext2D, b: Body, pal: Palette) {
+  draw(ctx: CanvasRenderingContext2D, b: Body, pal: Palette, res = 1) {
     // The left-hand normal of the body; flip which side is lit only once it clearly
     // faces away, so the shading never flickers with the gait.
     const toLight = -Math.sin(b.heading) * LIGHT.x + Math.cos(b.heading) * LIGHT.y;
     if (toLight > 0.25) this.lit = 1;
     else if (toLight < -0.25) this.lit = -1;
 
-    const project: Project = (x, y, z) => b.project(x, y, z);
-    const flat: Project = (x, y) => ({ x, y });
+    // Art px in, canvas pixels out.
+    const project: Project = (x, y, z) => { const p = b.project(x, y, z); return { x: p.x * res, y: p.y * res }; };
+    const flat: Project = (x, y) => ({ x: x * res, y: y * res });
 
-    this.frame(b, project);
-    this.rasteriseBody(b, project);
-    const legs = this.legPixels(b, pal, project, this.snapped);
+    this.frame(b, project, res);
+    this.rasteriseBody(b, project, res);
+    const legs = this.legPixels(b, pal, project, this.snapped, res);
 
     // The shadow: the body at its true size on the ground, each part offset by its height.
     const { bw, bh, bx, by } = this;
@@ -109,11 +113,12 @@ export class GeckoRenderer {
       const o = castShadow(b, b.z[i], p.x, p.y);
       const g = b.ground(p.x + o + 0.5, p.y + o + 0.5);
       const q = project(p.x + o, p.y + o, g);
-      disc(q.x, q.y, halfWidth(i) * b.breathScale(i) * b.squeeze[i] * (1 + NEARER * g), (x, y) => mark(x, y));
+      disc(q.x, q.y, halfWidth(i) * b.breathScale(i) * b.squeeze[i] * (1 + NEARER * g) * res, (x, y) => mark(x, y));
     }
-    for (const p of this.legPixels(b, pal, flat, this.snappedShadow)) {
-      const o = castShadow(b, p.z, p.x, p.y);
-      const q = project(p.x + o, p.y + o, b.ground(p.x + o + 0.5, p.y + o + 0.5));
+    for (const p of this.legPixels(b, pal, flat, this.snappedShadow, res)) {
+      const ax = (p.x + 0.5) / res, ay = (p.y + 0.5) / res;
+      const o = castShadow(b, p.z, ax, ay);
+      const q = project(ax + o, ay + o, b.ground(ax + o, ay + o));
       mark(Math.floor(q.x), Math.floor(q.y));
     }
     ctx.fillStyle = pal.shadow;
@@ -123,7 +128,7 @@ export class GeckoRenderer {
 
     for (const p of legs) { ctx.fillStyle = p.c; ctx.fillRect(p.x, p.y, 1, 1); }
     this.paintBody(ctx, b, pal);
-    this.paintHead(ctx, b, pal, project);
+    this.paintHead(ctx, b, pal, project, res);
   }
 
   /** A spine point with the tail twitch applied (before any projection). */
@@ -133,7 +138,7 @@ export class GeckoRenderer {
   }
 
   /** Size the work area to cover the drawn body, its feet and its shadow. */
-  private frame(b: Body, project: Project) {
+  private frame(b: Body, project: Project, res: number) {
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     const take = (x: number, y: number) => {
       if (x < minX) minX = x; if (x > maxX) maxX = x;
@@ -141,15 +146,15 @@ export class GeckoRenderer {
     };
     for (let i = 0; i < SPINE; i++) {
       const p = b.pts[i];
-      take(p.x, p.y);
+      take(p.x * res, p.y * res);
       const q = project(p.x, p.y, b.z[i]);
       take(q.x, q.y);
     }
-    const pad = 10;
+    const pad = Math.ceil(10 * res);
     this.bx = Math.floor(minX) - pad;
     this.by = Math.floor(minY) - pad;
-    this.bw = Math.ceil(maxX) + pad + 10 - this.bx;
-    this.bh = Math.ceil(maxY) + pad + 10 - this.by;
+    this.bw = Math.ceil(maxX) + 2 * pad - this.bx;
+    this.bh = Math.ceil(maxY) + 2 * pad - this.by;
     const size = this.bw * this.bh;
     if (this.depth.length < size) {
       this.depth = new Float32Array(size);
@@ -159,13 +164,13 @@ export class GeckoRenderer {
     this.depth.fill(0, 0, size);
   }
 
-  private rasteriseBody(b: Body, project: Project) {
+  private rasteriseBody(b: Body, project: Project, res: number) {
     for (let i = SPINE - 1; i >= 0; i--) {
       const sp = this.spinePoint(b, i);
       const f = b.forward(i);
       const z = b.z[i];
       const { x: cx, y: cy } = project(sp.x, sp.y, z);
-      const r = halfWidth(i) * b.breathScale(i) * b.squeeze[i] * (1 + NEARER * Math.max(0, z));
+      const r = halfWidth(i) * b.breathScale(i) * b.squeeze[i] * (1 + NEARER * Math.max(0, z)) * res;
       disc(cx, cy, r, (x, y, dx, dy, d2) => {
         const lx = x - this.bx, ly = y - this.by;
         if (lx < 0 || ly < 0 || lx >= this.bw || ly >= this.bh) return;
@@ -199,7 +204,7 @@ export class GeckoRenderer {
     }
   }
 
-  private paintHead(ctx: CanvasRenderingContext2D, b: Body, pal: Palette, project: Project) {
+  private paintHead(ctx: CanvasRenderingContext2D, b: Body, pal: Palette, project: Project, res: number) {
     const a = b.headAngle;
     const fx = Math.cos(a), fy = Math.sin(a);
     const lx = fy, ly = -fx; // animal's left
@@ -209,7 +214,7 @@ export class GeckoRenderer {
       return { x: Math.floor(q.x), y: Math.floor(q.y) };
     };
     const px = (p: { x: number; y: number }, c: string) => { ctx.fillStyle = c; ctx.fillRect(p.x, p.y, 1, 1); };
-    const s0 = 1 + NEARER * Math.max(0, b.z[0]);
+    const s0 = (1 + NEARER * Math.max(0, b.z[0])) * res;
 
     // One dark pixel per eye, on the sides of the skull; closed, it reads as shade.
     for (const side of [1, -1]) {
@@ -234,22 +239,22 @@ export class GeckoRenderer {
         // Eye lick: the tongue sweeps from the snout up over one eye.
         const eye = project(b.pts[3].x + lx * t.side * halfWidth(3), b.pts[3].y + ly * t.side * halfWidth(3), b.z[3]);
         const u = ext;
-        const mx = tip.x + (eye.x - tip.x) * u + fx * 1.2 * Math.sin(u * Math.PI);
-        const my = tip.y + (eye.y - tip.y) * u + fy * 1.2 * Math.sin(u * Math.PI);
-        px({ x: Math.floor(tip.x + fx * 0.8), y: Math.floor(tip.y + fy * 0.8) }, pal.tongue);
+        const mx = tip.x + (eye.x - tip.x) * u + fx * 1.2 * s0 * Math.sin(u * Math.PI);
+        const my = tip.y + (eye.y - tip.y) * u + fy * 1.2 * s0 * Math.sin(u * Math.PI);
+        px({ x: Math.floor(tip.x + fx * 0.8 * s0), y: Math.floor(tip.y + fy * 0.8 * s0) }, pal.tongue);
         px({ x: Math.floor(mx), y: Math.floor(my) }, pal.tongue);
-        px({ x: Math.floor((mx + tip.x) / 2 + fx), y: Math.floor((my + tip.y) / 2 + fy) }, pal.tongue);
+        px({ x: Math.floor((mx + tip.x) / 2 + fx * s0), y: Math.floor((my + tip.y) / 2 + fy * s0) }, pal.tongue);
       }
     }
   }
 
-  private legPixels(b: Body, pal: Palette, project: Project, snaps: Map<Leg, Snapped>): LegPixel[] {
+  private legPixels(b: Body, pal: Palette, project: Project, snaps: Map<Leg, Snapped>, res: number): LegPixel[] {
     const out: LegPixel[] = [];
-    for (const leg of b.legs) this.legToPixels(b, leg, pal, out, project, snaps);
+    for (const leg of b.legs) this.legToPixels(b, leg, pal, out, project, snaps, res);
     return out;
   }
 
-  private legToPixels(b: Body, leg: Leg, pal: Palette, out: LegPixel[], project: Project, snaps: Map<Leg, Snapped>) {
+  private legToPixels(b: Body, leg: Leg, pal: Palette, out: LegPixel[], project: Project, snaps: Map<Leg, Snapped>, res: number) {
     const lift = leg.lift;
     const f = b.forward(leg.def.seg);
     const side = leg.def.side;
@@ -305,7 +310,8 @@ export class GeckoRenderer {
     const fwdBias = leg.def.front ? Math.atan2(f.y, f.x) : Math.atan2(-f.y, -f.x);
     const dir = this.lockToes ? leg.toe : blendAngle(Math.atan2(oy, ox), fwdBias, leg.def.front ? 0.5 : 0.35);
     for (const spread of [-0.75, 0.75]) {
-      put(foot.x + Math.cos(dir + spread) * 1.2, foot.y + Math.sin(dir + spread) * 1.2, 0, zf);
+      // A short claw line from the foot, so it stays attached however fine the grid.
+      line(foot.x, foot.y, foot.x + Math.cos(dir + spread) * 1.2 * res, foot.y + Math.sin(dir + spread) * 1.2 * res, 0, 0, zf, zf);
     }
   }
 }
