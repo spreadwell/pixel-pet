@@ -10,11 +10,10 @@ import { TAU, angleDiff, approach, approachAngle, clamp, lerp, noise1, rand } fr
  * sprawling lizard's does, while the head stays stabilised.
  *
  * Gait phase advances with distance travelled, never with time, so planted feet never
- * slide. At a stroll it walks the way lizards do, one foot at a time in lateral
- * sequence (left hind, left fore, right hind, right fore), each foot down most of the
- * time and swung forward quickly; speeding up, that blends into a trot, diagonal pairs
- * swinging together. A leg that is over-stretched or badly placed after a turn takes a
- * quick corrective step.
+ * slide. It trots: diagonal pairs swing together. (A lateral-sequence walk at low
+ * speed — one foot at a time, blending into the trot — is available as `natural`, but
+ * looked worse side by side and is off.) A leg that is over-stretched or badly placed
+ * after a turn takes a quick corrective step.
  *
  * The ground has height (see World.groundAt). Each spine point takes the height of the
  * terrain under it, and the body drapes over steps like a rope, never steeper than
@@ -205,8 +204,8 @@ export class Body {
   ground: (x: number, y: number) => number = () => 0;
   /** Crawling under a panel rather than over the terrain. */
   under = false;
-  /** Walk in lateral sequence at low speed (off: always trot, the old gait). */
-  natural = true;
+  /** Walk in lateral sequence at low speed, blending into the trot. Off: always trot. */
+  natural = false;
   /** 0 walking → 1 trotting. */
   private trot = 0;
   /** Feet that came down this tick (the engine drains these to make things react). */
