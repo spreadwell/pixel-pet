@@ -1,0 +1,10 @@
+{
+  "id": "butter-pet",
+  "name": "Butter Pet",
+  "version": "0.1.0",
+  "minAppVersion": "1.7.2",
+  "description": "A living pixel gecko that roams your workspace, hunts the bugs your writing attracts, and nibbles the occasional letter.",
+  "author": "Spreadwell",
+  "authorUrl": "https://github.com/spreadwell",
+  "isDesktopOnly": false
+}

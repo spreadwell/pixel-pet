@@ -1,0 +1,16 @@
+/* The pet lives on a click-through layer above the workspace but below popovers,
+   menus and modals. */
+.butter-pet-overlay {
+  position: fixed;
+  left: 0;
+  top: 0;
+  pointer-events: none;
+  z-index: calc(var(--layer-popover, 30) - 1);
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+
+/* A nibbled letter is only painted transparent; the note text is untouched. */
+::highlight(butter-pet-nibble) {
+  color: transparent;
+}

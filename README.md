@@ -1,0 +1,32 @@
+# Butter Pet
+
+A small pixel-art gecko that lives in your Obsidian workspace.
+
+It keeps to the seams between your panels the way real geckos keep to the cracks between stones. It moves in short bursts and then holds still to look around. It notices your pointer, darts away if you move at it too fast, and lets you pet it if you hover over it slowly. When you've been away for a while, it curls up and sleeps.
+
+Writing brings it food. Every few dozen words a fly drifts in from the edge of the window, and finishing a task brings out a cricket. The gecko stalks them, freezes with its tail tip twitching, and strikes. It doesn't always catch them.
+
+Now and then it tastes a word with its tongue and takes a bite out of a letter. **Only the display changes. Your note is never modified.** The letter grows back after a minute or so.
+
+## Details
+
+- It takes on your accent color by default, or you can choose your own.
+- It stays out of the way while you type and never sits on the line you're writing.
+- It never blocks clicks: the pet lives on a click-through layer that sits below menus, popovers and modals.
+- It pauses completely when Obsidian is hidden and runs at a few frames per second while asleep.
+- Reduced motion is respected, following your system setting unless you override it.
+
+Show or hide it from the ribbon (paw icon) or the command palette. The palette also has **Call the pet over** and **Release a bug**.
+
+Works on desktop and mobile. On touch screens, tap near it to get its attention, hold a finger on it to pet it, and tap it directly to make it dart away.
+
+## Development
+
+```text
+npm install
+npm run typecheck
+npm run build      # main.js for Obsidian
+npm run harness    # harness/harness.js, then open harness/index.html over http
+```
+
+The engine in `src/engine/` has no Obsidian dependency. `harness/index.html` mimics Obsidian's layout so behavior can be tuned in a plain browser, with a loupe, contact sheets, and `sim(seconds)` to step the simulation.

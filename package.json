@@ -1,0 +1,23 @@
+{
+  "name": "butter-pet",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A living pixel gecko that roams your Obsidian workspace.",
+  "main": "main.js",
+  "license": "MIT",
+  "author": "Spreadwell",
+  "type": "module",
+  "scripts": {
+    "build": "node esbuild.config.mjs production",
+    "dev": "node esbuild.config.mjs",
+    "harness": "node esbuild.config.mjs harness",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.3",
+    "builtin-modules": "^4.0.0",
+    "esbuild": "^0.25.3",
+    "obsidian": "^1.8.10",
+    "typescript": "^5.8.3"
+  }
+}
