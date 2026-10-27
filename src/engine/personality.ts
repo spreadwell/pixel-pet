@@ -152,6 +152,7 @@ export const STATE = {
   SLEEP: 'sleep',
   NIBBLE: 'nibble',
   HIDE: 'hide',
+  HELD: 'held',
 } as const;
 export type State = (typeof STATE)[keyof typeof STATE];
 
@@ -464,6 +465,15 @@ const StateHandlers: Record<State, Handler> = {
     },
   },
 
+  // Picked up by the user. The body dangles and squirms; the mind just waits to be let go.
+  [STATE.HELD]: {
+    enter(g) { g.stateData = {}; g.currentSpeed = 0; },
+    update(g) {
+      if (g.stateTimer % 40 === 15) g.flick();
+      return { targetSpeed: 0 };
+    },
+  },
+
   // Under a side panel: approach its edge, slip under, wait, turn round, peek out and
   // look about, then come out — or think better of it and go back under.
   [STATE.HIDE]: {
@@ -734,7 +744,7 @@ export class Personality {
       ({ x, y } = w.clampToBounds(x, y, 12));
       if (w.onText(x, y, 3) && Math.random() < 0.75) continue;
       // The note is home ground; up on a panel is an excursion.
-      if (w.groundAt(x, y) >= 5 && Math.random() < 0.65) continue;
+      if (w.groundAt(x, y) >= 6 && Math.random() < 0.65) continue;
       // Leave the place you're typing alone.
       if (this.typing && w.caret && dist(x, y, w.caret.x, w.caret.y) < 45) continue;
       set(x, y);
@@ -745,7 +755,7 @@ export class Personality {
 
   /** Something alarming at (x, y): a poke, a panel snapping open, typing right next to it. */
   scare(x: number, y: number, mild = false) {
-    if (this.state === STATE.FLEE || this.state === STATE.STARTLE) return;
+    if (this.state === STATE.FLEE || this.state === STATE.STARTLE || this.state === STATE.HELD) return;
     this.threatX = x;
     this.threatY = y;
     this.mildScare = mild || this.c.opts.reducedMotion;
@@ -753,6 +763,27 @@ export class Personality {
     this.petted = false;
     this.petTimer = 0;
     this.enterState(mild ? STATE.FLEE : STATE.STARTLE);
+  }
+
+  /** Lifted off the ground by the user. */
+  pickUp() {
+    this.dropLetter();
+    this.cover = null;
+    this.forcedNap = false;
+    this.petted = false;
+    this.petTimer = 0;
+    this.enterState(STATE.HELD);
+  }
+
+  /** Set down again: a moment frozen where it landed, then off it scurries. */
+  putDown() {
+    const b = this.body;
+    this.angle = this.targetAngle = b.heading;
+    // The threat is behind it, so it runs the way it is facing.
+    this.threatX = b.pts[12].x;
+    this.threatY = b.pts[12].y;
+    this.mildScare = this.c.opts.reducedMotion;
+    this.enterState(STATE.STARTLE);
   }
 
   summon(target: { x: number; y: number }) {
@@ -926,11 +957,13 @@ export class Personality {
     this.lastCursor = p ? { ...p } : null;
     const cursorDist = p ? this.distTo(p.x, p.y) : Infinity;
 
-    this.disturbances();
-    this.scheduleNibble();
-    this.detectBugs();
-    this.checkInterrupts(cursorDist);
-    this.updatePetting();
+    if (this.state !== STATE.HELD) {
+      this.disturbances();
+      this.scheduleNibble();
+      this.detectBugs();
+      this.checkInterrupts(cursorDist);
+      this.updatePetting();
+    }
 
     const result = StateHandlers[this.state].update(this);
     if (result.transition) this.enterState(result.transition);
@@ -950,7 +983,7 @@ export class Personality {
     b.lidTarget = sleeping ? (this.sleepPeeking ? 0.25 : 1) : this.petted ? 0.55 : 0;
     b.breathRate = sleeping || this.state === STATE.BASKING || this.petted ? 0.29 : 0.57;
     b.breathDepth = sleeping ? 0.085 : 0.05;
-    b.tailTwitch = this.state === STATE.HUNT ? 0.7 : this.state === STATE.STARTLE ? 0.35 : 0;
+    b.tailTwitch = this.state === STATE.HELD ? 0.8 : this.state === STATE.HUNT ? 0.7 : this.state === STATE.STARTLE ? 0.35 : 0;
     if (this.mouthTicks > 0) { this.mouthTicks--; b.mouthTarget = this.mouthTicks > 4 ? 1 : 0.4; }
     else if (this.state !== STATE.NIBBLE && this.state !== STATE.HUNT) b.mouthTarget = 0;
 

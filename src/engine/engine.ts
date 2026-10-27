@@ -1,5 +1,6 @@
 import { Body } from './body';
 import { BugKind, Particles, Swarm } from './bugs';
+import { Grabber } from './grab';
 import { InputTracker } from './input';
 import { clamp, rand } from './math';
 import { Nibbler } from './nibble';
@@ -27,6 +28,7 @@ export class PetEngine {
   private ctx2d: CanvasRenderingContext2D;
   private world: World;
   private input: InputTracker;
+  private grabber: Grabber;
   private swarm = new Swarm();
   private particles = new Particles();
   private nibbler: Nibbler;
@@ -55,6 +57,12 @@ export class PetEngine {
     this.ctx2d = this.canvas.getContext('2d')!;
     this.world = new World(win);
     this.input = new InputTracker(win);
+    this.grabber = new Grabber(win, {
+      hit: (x, y) => this.hitsPet(x, y),
+      start: (x, y) => { this.body.grab(x / this.opts.px, y / this.opts.px); this.brain.pickUp(); },
+      move: (x, y) => this.body.holdAt(x / this.opts.px, y / this.opts.px),
+      end: () => { this.body.release(); this.brain.putDown(); },
+    });
     this.nibbler = new Nibbler(win);
     this.buildPalettes();
   }
@@ -67,6 +75,7 @@ export class PetEngine {
     this.resize();
     this.world.scan();
     this.input.attach();
+    this.grabber.attach();
     this.win.addEventListener('resize', this.onResize);
     this.win.visualViewport?.addEventListener('resize', this.onResize);
     doc.addEventListener('visibilitychange', this.onVisibility);
@@ -89,6 +98,7 @@ export class PetEngine {
   destroy() {
     this.win.cancelAnimationFrame(this.raf);
     this.input.detach();
+    this.grabber.detach();
     this.win.removeEventListener('resize', this.onResize);
     this.win.visualViewport?.removeEventListener('resize', this.onResize);
     this.win.document.removeEventListener('visibilitychange', this.onVisibility);
@@ -130,6 +140,14 @@ export class PetEngine {
     const p = this.input.pointer;
     const b = this.world.bounds;
     this.brain.summon(p ? { x: p.x / this.opts.px, y: p.y / this.opts.px } : { x: b.x + b.w / 2, y: b.y + b.h / 2 });
+  }
+
+  /** Is the CSS point (x, y) on the pet — and not on a panel it is hiding under? */
+  private hitsPet(x: number, y: number) {
+    if (!this.brain) return false;
+    const ax = x / this.opts.px, ay = y / this.opts.px;
+    if (this.body.under && this.world.coverAt(ax, ay)) return false;
+    return this.brain.bodyDistance(ax, ay) < 1.5;
   }
 
   /** Advance the simulation without waiting for animation frames (testing, previews). */

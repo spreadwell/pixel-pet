@@ -5,6 +5,10 @@ export interface Palette {
   base: string;
   /** The side turned away from the light. */
   shade: string;
+  /** Where the body crests over something and catches the light. */
+  crest: string;
+  /** Where it dips into a crease, in shade. */
+  crease: string;
   eye: string;
   tongue: string;
   shadow: string;
@@ -65,6 +69,8 @@ export function buildPalette(doc: Document, seedExpr: string, warmth = 0): Palet
   return {
     base: hsl(h, s, l),
     shade: hsl(h - 4, Math.min(1, s * 1.05), l * 0.68),
+    crest: hsl(h + 4, s * 0.9, Math.min(0.86, l + 0.14)),
+    crease: hsl(h - 8, Math.min(1, s * 1.1), l * 0.5),
     eye: hsl(h - 25, 0.35, 0.1),
     tongue: 'hsl(350 70% 66%)',
     shadow: dark ? 'rgba(0,0,0,0.42)' : 'rgba(40,30,10,0.16)',

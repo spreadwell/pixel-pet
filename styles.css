@@ -14,3 +14,13 @@
 ::highlight(pixel-pet-nibble) {
   color: transparent;
 }
+
+/* Over the pet the cursor becomes a hand: it can be picked up and carried. */
+body.pixel-pet-hover,
+body.pixel-pet-hover * {
+  cursor: grab !important;
+}
+body.pixel-pet-holding,
+body.pixel-pet-holding * {
+  cursor: grabbing !important;
+}

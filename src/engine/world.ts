@@ -37,21 +37,27 @@ const COVER_SELECTORS: [string, number][] = [
 ];
 /** How high each part of the interface stands above the note, in art px. */
 const HEIGHT_SELECTORS: [string, number][] = [
-  ['.view-header', 3],
-  ['.status-bar', 4],
-  ['.workspace-split.mod-left-split', 5],
-  ['.workspace-split.mod-right-split', 5],
-  ['.workspace-drawer', 5],
-  ['.workspace-tab-header-container', 6],
-  ['.mobile-navbar', 6],
-  ['.mobile-toolbar', 6],
-  ['.workspace-ribbon', 7],
-  ['.titlebar', 7],
-  ['.workspace-tab-header', 8],
+  ['.view-header', 4],
+  ['.status-bar', 5],
+  ['.workspace-split.mod-left-split', 6],
+  ['.workspace-split.mod-right-split', 6],
+  ['.workspace-drawer', 6],
+  ['.workspace-tab-header-container', 7],
+  ['.mobile-navbar', 7],
+  ['.mobile-toolbar', 7],
+  ['.workspace-ribbon', 8],
+  ['.titlebar', 8],
+  ['.workspace-tab-header', 10],
 ];
-/** Lines of text are ridges on the note; headings stand a little taller. */
-const TEXT_Z = 2;
-const HEADING_Z = 3;
+/**
+ * Each line of text is its own ridge, as tall as the letters stand and trimmed to the
+ * band where they sit, so a paragraph is a run of ridges to clamber over rather than
+ * one slab. Headings stand a little taller.
+ */
+const TEXT_Z = 4;
+const HEADING_Z = 5;
+const LINE_TRIM_TOP = 0.22;
+const LINE_TRIM_BOTTOM = 0.18;
 /** Where the words are: the editor and reading view. */
 const TEXT_ROOTS = '.cm-content, .markdown-preview-view';
 /** Bounds on the text scan, which runs twice a second. */
@@ -237,7 +243,10 @@ export class World {
     // Lines much taller than most are headings.
     const sorted = lines.map((l) => l.h).sort((a, b) => a - b);
     const typical = sorted[Math.floor(sorted.length / 2)] ?? 0;
-    return lines.map((l) => ({ ...this.toArt(l), z: l.h > typical * 1.3 ? HEADING_Z : TEXT_Z }));
+    return lines.map((l) => {
+      const a = this.toArt(l);
+      return { x: a.x, y: a.y + a.h * LINE_TRIM_TOP, w: a.w, h: a.h * (1 - LINE_TRIM_TOP - LINE_TRIM_BOTTOM), z: l.h > typical * 1.3 ? HEADING_Z : TEXT_Z };
+    });
   }
 
   /** Rasterise the terrain: interface parts by selector, then the lines of text. */

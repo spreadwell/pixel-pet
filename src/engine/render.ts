@@ -17,7 +17,7 @@ import type { Palette } from './palette';
 interface LegPixel { x: number; y: number; c: string; lift: number; z: number; }
 
 /** Shadow offset (art px) for a pixel `h` above the ground. */
-const shadowOffset = (h: number) => 1 + Math.round(Math.min(6, Math.max(0, h * 0.9)));
+const shadowOffset = (h: number) => 1 + Math.round(Math.min(8, Math.max(0, h * 0.9)));
 
 /**
  * Where the shadow of a pixel at height `z` lands: measured against the ground where it
@@ -42,6 +42,7 @@ export class GeckoRenderer {
   private by = 0;
   /** Which side of the spine (+1 = animal's left) faces the light. Switches with hysteresis. */
   private lit: 1 | -1 = 1;
+  private bend = new Float32Array(SPINE);
 
   draw(ctx: CanvasRenderingContext2D, b: Body, pal: Palette) {
     // The left-hand normal of the body; flip which side is lit only once it clearly
@@ -55,7 +56,7 @@ export class GeckoRenderer {
 
     // Shadow first (deduplicated so overlaps don't darken).
     const { bw, bh, bx, by } = this;
-    const sw = bw + 8, sh = bh + 8;
+    const sw = bw + 10, sh = bh + 10;
     if (this.shadow.length < sw * sh) this.shadow = new Uint8Array(sw * sh);
     const shadow = this.shadow;
     shadow.fill(0, 0, sw * sh);
@@ -81,7 +82,7 @@ export class GeckoRenderer {
     }
 
     for (const p of legs) { ctx.fillStyle = p.c; ctx.fillRect(p.x, p.y, 1, 1); }
-    this.paintBody(ctx, pal);
+    this.paintBody(ctx, b, pal);
     this.paintHead(ctx, b, pal);
   }
 
@@ -136,12 +137,20 @@ export class GeckoRenderer {
     }
   }
 
-  private paintBody(ctx: CanvasRenderingContext2D, pal: Palette) {
-    const { bw, bh, bx, by, depth, lat } = this;
+  private paintBody(ctx: CanvasRenderingContext2D, b: Body, pal: Palette) {
+    const { bw, bh, bx, by, depth, lat, seg } = this;
+    // How the spine bends over the terrain at each point: positive where it crests over
+    // a ridge or the lip of a ledge, negative in the dip or crease below one.
+    const bend = this.bend;
+    for (let i = 0; i < SPINE; i++) {
+      const a = b.z[Math.max(0, i - 2)], c = b.z[Math.min(SPINE - 1, i + 2)];
+      bend[i] = b.z[i] - (a + c) / 2;
+    }
     for (let y = 0; y < bh; y++) for (let x = 0; x < bw; x++) {
       const k = y * bw + x;
       if (depth[k] <= 0) continue;
-      ctx.fillStyle = (lat[k] >= 0 ? 1 : -1) === this.lit ? pal.base : pal.shade;
+      const lit = (lat[k] >= 0 ? 1 : -1) === this.lit, d = bend[seg[k]];
+      ctx.fillStyle = d > 0.3 ? (lit ? pal.crest : pal.base) : d < -0.3 ? (lit ? pal.shade : pal.crease) : lit ? pal.base : pal.shade;
       ctx.fillRect(bx + x, by + y, 1, 1);
     }
   }
@@ -203,7 +212,7 @@ export class GeckoRenderer {
     const c = side === this.lit ? pal.base : pal.shade;
     const seen = new Set<number>();
     // Heights: the hip rides with the body, the foot stands on the terrain (or lifts off it).
-    const zh = b.z[leg.def.seg], zf = b.ground(foot.x, foot.y) + lift * 1.5, zk = (zh + zf) / 2;
+    const zh = b.z[leg.def.seg], zf = b.footZ(leg), zk = (zh + zf) / 2;
     const put = (x: number, y: number, l: number, z: number) => {
       const ix = Math.floor(x), iy = Math.floor(y);
       const key = iy * 100003 + ix;

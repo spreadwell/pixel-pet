@@ -17,7 +17,12 @@ import { TAU, angleDiff, approach, approachAngle, clamp, lerp, noise1, rand } fr
  * terrain under it, and the body drapes over steps like a rope, never steeper than
  * DRAPE_SLOPE: points beside a ledge lift off the low side and bridge up to the top.
  * Spacing between points is kept in 3D, so where the body is steep it bunches up as
- * seen from above. Climbing slows it down; in a narrow gap it squeezes thinner.
+ * seen from above. At the foot of a step it hesitates, then scrambles up; at the top of
+ * a drop it stops with its head out over the edge and peers about before picking its
+ * way down. In a narrow gap it squeezes thinner.
+ *
+ * It can be picked up: while held, the gripped point follows the pointer, the rest
+ * dangles and squirms with the legs paddling, high above its shadow.
  */
 
 export const SPINE = 36;
@@ -80,6 +85,8 @@ const COMFORT = 0.9;
 const MAX_STEP_HZ = 8;
 /** Steepest the body drapes over a step: height change per art px of spine. */
 const DRAPE_SLOPE = 0.8;
+/** How high a held gecko is lifted above the ground, in art px. */
+const HELD_Z = 12;
 /** Horizontal length of one spine segment that rises `dz`. */
 const segH = (dz: number) => Math.sqrt(Math.max(0.5, SEG * SEG - dz * dz));
 
@@ -186,6 +193,10 @@ export class Body {
   /** A pause at the foot of a ledge before scrambling up it; re-armed once clear of it. */
   private ledgePause = 0;
   private ledgeArmed = true;
+  /** Pausing at the top of a drop, looking over. */
+  private peering = false;
+  /** Picked up by the user: which spine point is gripped, and where it is being held. */
+  private held: { i: number; x: number; y: number } | null = null;
   private zDrape: number[] = new Array(SPINE).fill(0);
 
   /** Lateral wiggle of head yaw while idle, for life. */
@@ -223,8 +234,40 @@ export class Body {
     this.tongue = { kind, t: 0, side: Math.random() < 0.5 ? 1 : -1 };
   }
 
+  get isHeld() { return !!this.held; }
+
+  /** Pick the gecko up at (x, y), gripping the nearest spine point. */
+  grab(x: number, y: number) {
+    let best = 0, bd = Infinity;
+    for (let i = 0; i < SPINE; i++) {
+      const d = Math.hypot(this.pts[i].x - x, this.pts[i].y - y);
+      if (d < bd) { bd = d; best = i; }
+    }
+    this.held = { i: best, x, y };
+    this.under = false;
+  }
+
+  holdAt(x: number, y: number) { if (this.held) { this.held.x = x; this.held.y = y; } }
+
+  /** Let go: it drops onto whatever is below and carries on from the pose it is in. */
+  release() {
+    if (!this.held) return;
+    this.held = null;
+    this.speed = 0;
+    this.heading = Math.atan2(this.pts[0].y - this.pts[NECK].y, this.pts[0].x - this.pts[NECK].x);
+    this.headYaw = 0;
+    for (let i = 0; i < SPINE; i++) { this.path[i].x = this.pts[i].x; this.path[i].y = this.pts[i].y; }
+    for (const leg of this.legs) { leg.lift = 0; leg.swinging = false; leg.syncCycle(this.gaitPhase); }
+  }
+
+  /** Height of a foot: on the ground, raised while it swings, dangling when held. */
+  footZ(leg: Leg) {
+    return this.held ? this.z[leg.def.seg] : this.ground(leg.foot.x, leg.foot.y) + leg.lift * 1.5;
+  }
+
   update(dt: number, drive: Drive) {
     this.time += dt;
+    if (this.held) { this.updateHeld(dt); this.lifeSignals(dt); return; }
 
     // ── Locomotion ──────────────────────────────────────────
     const want = Math.max(0, drive.speed);
@@ -241,11 +284,19 @@ export class Body {
     // A step up ahead slows it to a scramble; going down it picks its way a little.
     const n = this.pts[NECK];
     const rise = this.ground(n.x + Math.cos(this.heading) * 3, n.y + Math.sin(this.heading) * 3) - this.z[NECK];
-    if (rise > 2.5 && this.speed > 3 && this.speed < 60) {
-      if (this.ledgeArmed) { this.ledgePause = rand(0.25, 0.5); this.ledgeArmed = false; }
-    } else if (rise < 1) this.ledgeArmed = true;
+    // A step up or down: hesitate first — a beat for a line of text, longer at a real
+    // ledge, and at the top of a big drop, a long look over the edge.
+    if (Math.abs(rise) > 2.5 && this.speed > 3 && this.speed < 60) {
+      if (this.ledgeArmed) {
+        const big = Math.abs(rise) > 5.5;
+        this.ledgePause = rise > 0 ? (big ? rand(0.25, 0.5) : rand(0.08, 0.16)) : big ? rand(0.4, 0.8) : rand(0.05, 0.12);
+        this.peering = rise < 0 && big;
+        this.ledgeArmed = false;
+      }
+    } else if (Math.abs(rise) < 1) this.ledgeArmed = true;
     this.ledgePause -= dt;
-    this.climb = approach(this.climb, this.ledgePause > 0 ? 0.05 : rise > 0.5 ? 0.45 : rise < -0.5 ? 0.8 : 1, 6, dt);
+    if (this.ledgePause <= 0) this.peering = false;
+    this.climb = approach(this.climb, this.ledgePause > 0 ? 0.05 : rise > 0.5 ? 0.45 : rise < -0.5 ? 0.55 : 1, 6, dt);
     const ds = this.speed * dt * this.climb;
     // Faster means longer strides first (up to what the legs can reach), then quicker ones.
     this.stride = approach(this.stride, clamp(STRIDE_MIN + this.speed * 0.05, STRIDE_MIN, STRIDE_MAX), 5, dt);
@@ -263,6 +314,7 @@ export class Body {
     let yawTarget = 0;
     if (drive.look !== null) yawTarget = clamp(angleDiff(this.heading, drive.look), -1.05, 1.05);
     else if (this.speed < 3) yawTarget = noise1(this.time * 0.35, this.idleSeed) * 0.25;
+    if (this.peering) yawTarget += Math.sin(this.time * 4) * 0.5;
     this.headYaw = approachAngle(this.headYaw, yawTarget - wave * 0.6, this.speed > 20 ? 14 : 9, dt);
 
     const ha = this.headAngle;
@@ -284,10 +336,6 @@ export class Body {
       let ang = Math.atan2(p.y - a.y, p.x - a.x);
       const maxB = BEND(i);
       let d = angleDiff(prevAng, ang);
-      if (this.curl > 0.001) {
-        const bias = this.curlDir * (i < TAIL_FIRST ? 0.07 : 0.18) * this.curl;
-        d = lerp(d, bias, Math.min(1, dt * 3 * this.curl));
-      }
       d = clamp(d, -maxB, maxB);
       ang = prevAng + d;
       const len = segH(this.z[i] - this.z[i - 1]);
@@ -309,6 +357,8 @@ export class Body {
       const fx = a.x - c.x, fy = a.y - c.y, fl = Math.hypot(fx, fy) || 1;
       let off = s * flexShape(i);
       if (i > HIP) off += Math.sin(this.gaitPhase * TAU - (i - HIP) * 0.4) * this.flexAmp * 0.8 * Math.min(1, (i - HIP) / 4);
+      // At rest the tail lies in a loose curve to one side.
+      if (i > HIP) off += this.curlDir * this.curl * 0.018 * (i - HIP) * (i - HIP);
       this.pts[i].x = p.x + (fy / fl) * off;
       this.pts[i].y = p.y - (fx / fl) * off;
     }
@@ -317,8 +367,53 @@ export class Body {
 
     // ── Legs ────────────────────────────────────────────────
     this.placeLegs(false, dt);
+    this.lifeSignals(dt);
+  }
 
-    // ── Small life signals ──────────────────────────────────
+  /** Dangling from the user's grip: squirming, legs paddling, lifted high. */
+  private updateHeld(dt: number) {
+    const h = this.held!, pts = this.pts;
+    const g = pts[h.i];
+    g.x = approach(g.x, h.x, 30, dt);
+    g.y = approach(g.y, h.y, 30, dt);
+    // Each free end trails from the grip, stiff enough to keep its shape, with a squirm
+    // running along it.
+    const hang = (from: number, to: number, step: number) => {
+      const g0 = pts[from - step], g1 = pts[Math.min(SPINE - 1, Math.max(0, from - 2 * step))];
+      let prev = Math.atan2(g0.y - g1.y, g0.x - g1.x);
+      for (let i = from; i !== to; i += step) {
+        const a = pts[i - step], q = pts[i];
+        let ang = Math.atan2(q.y - a.y, q.x - a.x);
+        ang = prev + clamp(angleDiff(prev, ang) + Math.sin(this.time * 9 + i * 0.5) * 0.05, -0.16, 0.16);
+        q.x = a.x + Math.cos(ang) * SEG;
+        q.y = a.y + Math.sin(ang) * SEG;
+        prev = ang;
+      }
+    };
+    hang(h.i - 1, -1, -1);
+    hang(h.i + 1, SPINE, 1);
+    for (let i = 0; i < SPINE; i++) {
+      this.path[i].x = pts[i].x; this.path[i].y = pts[i].y;
+      this.z[i] = approach(this.z[i], HELD_Z, 12, dt);
+      this.squeeze[i] = approach(this.squeeze[i], 1, 10, dt);
+    }
+    this.heading = Math.atan2(pts[0].y - pts[NECK].y, pts[0].x - pts[NECK].x);
+    this.headYaw = approachAngle(this.headYaw, Math.sin(this.time * 5) * 0.3, 8, dt);
+    for (const leg of this.legs) {
+      const hip = this.hipOf(leg);
+      leg.hip = hip;
+      const rest = this.restOf(leg, hip);
+      const f = this.forward(leg.def.seg);
+      const paddle = Math.sin(this.time * 13 + leg.def.phase * Math.PI * 2) * 1.6;
+      leg.foot = { x: rest.x + f.x * paddle, y: rest.y + f.y * paddle };
+      leg.lift = 1;
+      leg.swinging = false;
+      leg.knee = this.solveKnee(leg, hip);
+    }
+    this.speed = 0;
+  }
+
+  private lifeSignals(dt: number) {
     this.breath += dt * TAU * this.breathRate;
     this.twitch = approach(this.twitch, this.tailTwitch, 6, dt);
     this.updateLids(dt);
@@ -387,10 +482,12 @@ export class Body {
   }
 
   restOf(leg: Leg, hip: Pt): Pt {
-    const { seg, side, restFwd, restOut } = leg.def;
+    const { seg, side, restFwd, restOut, front } = leg.def;
     const f = this.forward(seg);
     const ox = -f.y * side, oy = f.x * side;
-    return { x: hip.x + ox * restOut + f.x * restFwd, y: hip.y + oy * restOut + f.y * restFwd };
+    // Resting, the legs tuck in alongside the body.
+    const out = restOut * (1 - 0.45 * this.curl), fwd = restFwd - (front ? 1.0 : 0.6) * this.curl;
+    return { x: hip.x + ox * out + f.x * fwd, y: hip.y + oy * out + f.y * fwd };
   }
 
   private placeLegs(init: boolean, dt = 0) {
@@ -413,7 +510,7 @@ export class Body {
           const dur = clamp((this.stride * SWING_FRACTION) / Math.max(this.speed, 1), 0.04, 0.28);
           leg.startSwing(dur);
           swingingCount++;
-        } else if ((stretch > reach * COMFORT && swingingCount < 2 && !this.skitter) || stretch > reach || (!moving && off > 2 && swingingCount < 2)) {
+        } else if ((stretch > reach * COMFORT && swingingCount < 2 && !this.skitter) || stretch > reach || (!moving && off > (this.curl > 0.5 ? 1 : 2) && swingingCount < 2)) {
           leg.startSwing(stretch > reach * COMFORT ? 0.08 : 0.13);
           swingingCount++;
         }
