@@ -10,6 +10,8 @@ export interface Palette {
   /** Where it dips into a crease, in shade. */
   crease: string;
   eye: string;
+  /** A catch-light in the eye. */
+  glint: string;
   tongue: string;
   shadow: string;
   ink: string;      // theme text colour, for crumbs and bugs
@@ -69,6 +71,7 @@ export function buildPalette(doc: Document, seedExpr: string): Palette {
     crest: hsl(h + 2, s * 0.97, Math.min(0.8, l + 0.05)),
     crease: hsl(h - 5, Math.min(1, s * 1.05), l * 0.61),
     eye: hsl(h - 25, 0.35, 0.1),
+    glint: 'hsl(0 0% 96%)',
     tongue: 'hsl(350 70% 66%)',
     shadow: dark ? 'rgba(0,0,0,0.42)' : 'rgba(40,30,10,0.16)',
     ink: `rgb(${ink.join(',')})`,

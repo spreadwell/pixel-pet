@@ -87,6 +87,8 @@ export class GeckoRenderer {
   stableLegs = true;
   /** Keep a planted foot's toes where they were set down, instead of turning with the body. */
   lockToes = true;
+  /** How the eyes are drawn: one pixel, a 2×2 block, a block with a glint, or bulging past the head. */
+  eyeStyle: 'dot' | 'big' | 'glint' | 'bulge' = 'dot';
   private snapped = new Map<Leg, Snapped>();
   private snappedShadow = new Map<Leg, Snapped>();
 
@@ -241,7 +243,27 @@ export class GeckoRenderer {
     const left = eyeAt(3, 1);
     let right = eyeAt(3, -1);
     for (const k of [4, 2]) if (right.x === left.x && right.y === left.y) right = eyeAt(k, -1);
-    for (const e of [left, right]) px(e, b.lid > 0.55 ? pal.shade : pal.eye);
+    const closed = b.lid > 0.55, col = closed ? pal.shade : pal.eye;
+    for (const [e, side] of [[left, 1], [right, -1]] as const) {
+      if (this.eyeStyle === 'dot') { px(e, col); continue; }
+      if (this.eyeStyle === 'bulge') {
+        // On the edge of the skull, and a pixel standing proud of it.
+        px(e, col);
+        const out = at(3, side * (b.width(3) + 0.6));
+        if (!onHead(out)) px(out, col);
+        continue;
+      }
+      // A 2×2 eye: of the four blocks that include this pixel, the one most on the head.
+      let best = e, bestOn = -1;
+      for (const [ox, oy] of [[0, 0], [-1, 0], [0, -1], [-1, -1]]) {
+        let on = 0;
+        for (const [dx, dy] of [[0, 0], [1, 0], [0, 1], [1, 1]]) if (onHead({ x: e.x + ox + dx, y: e.y + oy + dy })) on++;
+        if (on > bestOn) { bestOn = on; best = { x: e.x + ox, y: e.y + oy }; }
+      }
+      for (const [dx, dy] of [[0, 0], [1, 0], [0, 1], [1, 1]]) px({ x: best.x + dx, y: best.y + dy }, col);
+      // The glint sits on the corner nearest the light (upper left).
+      if (this.eyeStyle === 'glint' && !closed) px(best, pal.glint);
+    }
 
     // Mouth: when open, the snout tip splits.
     const tip = project(b.pts[0].x + fx * 0.9, b.pts[0].y + fy * 0.9, b.z[0]);
