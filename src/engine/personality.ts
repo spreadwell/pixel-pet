@@ -548,11 +548,11 @@ const StateHandlers: Record<State, Handler> = {
         return { targetSpeed: g.speed * 2.2 };
       }
       if (sd.phase === 'wary') {
-        // Turned to face it, frozen, watching, before it dares to creep back in.
-        g.targetAngle = toCaret;
+        // Frozen, head turned to watch it, before it dares to creep back in. (It turns its
+        // head rather than shuffling round, which in a tight spot tied it in knots.)
         g.headLook.lookAt(angleDiff(g.angle, toCaret));
         if (sd.phaseTimer > sd.waryFor) { sd.phase = 'stalk'; sd.phaseTimer = 0; sd.spot = null; }
-        return { targetSpeed: sd.phaseTimer < 20 ? 0.25 * S : 0 };
+        return { targetSpeed: 0 };
       }
 
       // Too close, or right in the path of the line being written: startle and scurry back.
@@ -573,7 +573,7 @@ const StateHandlers: Record<State, Handler> = {
       }
       g.headLook.lookAt(angleDiff(g.angle, toCaret));
       const d = dist(head.x, head.y, sd.spot.x, sd.spot.y);
-      if (d < 3) return { targetSpeed: 0 };
+      if (g.arrived(sd)) return { targetSpeed: 0 };
       const wp = g.waypoint(sd.spot.x, sd.spot.y);
       g.targetAngle = Math.atan2(wp.y - head.y, wp.x - head.x);
       // From afar it hurries closer; falling behind as you type along, it catches up at a
@@ -605,7 +605,7 @@ const StateHandlers: Record<State, Handler> = {
         sd.anchor = { ...p };
         g.planRoute(sd.spot.x, sd.spot.y);
       }
-      if (dist(head.x, head.y, sd.spot.x, sd.spot.y) < 4) {
+      if (g.arrived(sd)) {
         // Having watched a while, it dares a little closer — until it is close enough to stalk.
         if (++sd.waited > 120 + Math.random() * 60) { sd.waited = 0; sd.keep -= 12; sd.spot = null; }
         if (sd.timer % 200 === 100) g.flick();
@@ -1093,6 +1093,26 @@ export class Personality {
   get calm() {
     const s = this.state;
     return s === STATE.IDLE || s === STATE.EXPLORE || s === STATE.BASKING || s === STATE.LURK || s === STATE.CURIOUS;
+  }
+
+  /**
+   * Is it at `sd.spot`, near enough? Close by, a spot that is off to the side or behind
+   * would take a circle to reach — it can't turn on the spot — so it settles where it is.
+   */
+  arrived(sd: { spot: { x: number; y: number }; spin?: number; spinAt?: number; spinFrom?: number; lastAngle?: number }) {
+    const h = this.head, d = dist(h.x, h.y, sd.spot.x, sd.spot.y);
+    const settle = () => { sd.spot = { x: h.x, y: h.y }; sd.spin = 0; return true; };
+    if (d < 6) return true;
+    if (d < 18 && Math.abs(angleDiff(this.angle, Math.atan2(sd.spot.y - h.y, sd.spot.x - h.x))) > 1.2) return settle();
+    // Turning and turning without getting any nearer means it is circling: stop.
+    sd.spin = (sd.spin ?? 0) + Math.abs(angleDiff(sd.lastAngle ?? this.angle, this.angle));
+    sd.lastAngle = this.angle;
+    if (sd.spinAt === undefined || this.stateTimer - sd.spinAt > 45) {
+      const circling = sd.spin > 2.1 && d > (sd.spinFrom ?? Infinity) - 3;
+      sd.spin = 0; sd.spinAt = this.stateTimer; sd.spinFrom = d;
+      if (circling) return settle();
+    }
+    return false;
   }
 
   /** Is any of its head or trunk on, or right by, the text of the note? */
