@@ -76,3 +76,13 @@ body.pixel-pet-holding * {
   color: var(--text-muted);
   font-size: var(--font-ui-small);
 }
+
+/* The Z's of a sleeping pet, on their own finer-grained layer just above it. */
+.pixel-pet-zzz {
+  position: fixed;
+  left: 0;
+  top: 0;
+  pointer-events: none;
+  z-index: calc(var(--layer-popover, 30) - 1);
+  image-rendering: pixelated;
+}

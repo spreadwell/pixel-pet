@@ -47,7 +47,7 @@ export class PetEngine {
   private particles = new Particles();
   private nibbler: Nibbler;
   private renderer = new GeckoRenderer();
-  private zzz = new Zzz();
+  private zzz: Zzz;
   private body!: Body;
   private brain!: Personality;
   private pal!: Palette;
@@ -60,7 +60,7 @@ export class PetEngine {
   private scanIn = 0;
   private caretIn = 0;
   private maintainIn = 0;
-  private onResize = () => { this.resize(); this.reactions.resize(); this.world.scan(); };
+  private onResize = () => { this.resize(); this.reactions.resize(); this.zzz.resize(); this.world.scan(); };
   private onVisibility = () => { this.last = performance.now(); };
 
   constructor(private win: Window, private opts: PetOptions) {
@@ -86,6 +86,7 @@ export class PetEngine {
       drag: (at) => this.brain?.dragged(at ? { x: at.x / this.opts.px, y: at.y / this.opts.px } : null),
       scroll: (box, dx, dy) => this.scrolled(box, dx, dy),
     });
+    this.zzz = new Zzz(win);
     this.nibbler = new Nibbler(win);
     this.buildPalettes();
   }
@@ -96,6 +97,7 @@ export class PetEngine {
     this.reactions.attach();
     doc.body.appendChild(this.canvas);
     this.reactions.attachTop();
+    this.zzz.attach();
     this.world.px = this.opts.px;
     this.resize();
     this.world.scan();
@@ -134,6 +136,7 @@ export class PetEngine {
     this.win.document.removeEventListener('visibilitychange', this.onVisibility);
     this.nibbler.destroy();
     this.reactions.destroy();
+    this.zzz.destroy();
     this.canvas.remove();
   }
 
@@ -446,7 +449,7 @@ export class PetEngine {
     this.renderer.draw(g, this.body, pal, res);
     const zFrom = { x: this.renderer.headAt.x / res, y: this.renderer.headAt.y / res };
     // Fast asleep: Z's.
-    this.zzz.draw(g, pal, this.brain.dozing ? zFrom : null, performance.now(), res);
+    this.zzz.draw(pal, this.brain.dozing ? { x: zFrom.x * this.opts.px, y: zFrom.y * this.opts.px } : null, performance.now());
     if (this.brain.carrying) {
       const s = this.brain.snout(), px = this.opts.px;
       this.reactions.hold((s.x + 0.5) * px, (s.y + 0.5) * px, this.body.headAngle);
