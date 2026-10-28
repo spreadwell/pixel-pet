@@ -5,7 +5,7 @@ import { InputTracker } from './input';
 import { clamp, rand } from './math';
 import { Nibbler } from './nibble';
 import { Palette, buildPalette } from './palette';
-import { BrainOptions, Ctx, Personality, Playground, Pranks, STATE } from './personality';
+import { BrainOptions, Ctx, DiaryKind, Personality, Playground, Pranks, STATE } from './personality';
 import { Reactions } from './reactions';
 import { GeckoRenderer } from './render';
 import { Zzz } from './zzz';
@@ -28,6 +28,8 @@ export interface PetOptions extends BrainOptions {
   critters?: Partial<Record<BugKind, { enabled: boolean; pace: Pace }>>;
   /** Buttons it could press when it's being mischievous, in CSS px. */
   pranks?: Pranks;
+  /** Something worth putting in its diary happened. */
+  onDiary?: (kind: DiaryKind, text: string) => void;
 }
 
 /** The personality is tuned per 60 Hz tick, so the whole simulation runs on a fixed step. */
@@ -76,7 +78,7 @@ export class PetEngine {
     this.world = new World(win);
     this.input = new InputTracker(win);
     this.grabber = new Grabber(win, {
-      hit: (x, y) => this.hitsPet(x, y),
+      hit: (x, y) => this.hits(x, y),
       start: (x, y) => { this.body.grab(x / this.opts.px, y / this.opts.px); this.brain.pickUp(); },
       move: (x, y) => this.body.holdAt(x / this.opts.px, y / this.opts.px),
       end: () => { this.splash(); this.body.release(); this.brain.putDown(); },
@@ -124,6 +126,7 @@ export class PetEngine {
       particles: this.particles, pal: this.pal, opts: this.opts, now: performance.now(), pointer: null, pointerSpeed: 0,
       graph: this.playground(),
       pranks: this.prankable(),
+      log: (kind, text) => this.opts.onDiary?.(kind, text),
     };
     this.brain = new Personality(this.c, !at);
     this.last = performance.now();
@@ -183,14 +186,12 @@ export class PetEngine {
     // The note in focus — or, asked from the pet panel (which has the focus then), the
     // note showing in the main area.
     const doc = this.win.document;
-    const shown = [...doc.querySelectorAll<HTMLElement>('.mod-root .workspace-leaf-content:is([data-type="markdown"], [data-type="butter-editor"]) .view-content')].find((e) => e.offsetParent !== null);
-    const el = asked ? shown : doc.querySelector('.workspace-leaf.mod-active .view-content');
+    const el = asked ? this.shownNote() : doc.querySelector('.workspace-leaf.mod-active .view-content');
     const r = el?.getBoundingClientRect(), px = this.opts.px;
     this.brain?.newSurroundings(r && r.width > 0 ? { x: r.left / px, y: r.top / px, w: r.width / px, h: r.height / px } : null, asked);
   }
   private lastNoteChange = 0;
 
-  /** The graph's nodes as balls, in art px. */
   /** The prank targets, in art px. */
   private prankable(): Pranks | null {
     const p = this.opts.pranks, px = this.opts.px;
@@ -198,6 +199,7 @@ export class PetEngine {
     return { targets: () => p.targets().map((t) => ({ ...t, x: t.x / px, y: t.y / px })) };
   }
 
+  /** The graph's nodes as balls, in art px. */
   private playground(): Playground | null {
     const g = this.opts.graph, px = this.opts.px;
     if (!g) return null;
@@ -292,6 +294,25 @@ export class PetEngine {
 
   /** What the pet is up to, in a few words. */
   get activity() { return this.brain?.activity ?? 'Away'; }
+  /** Its state, for picking an icon to go with the activity. */
+  get stateKey() { return this.brain?.state ?? 'away'; }
+  get asleep() { return this.brain?.asleep ?? false; }
+
+  /** Why the pet panel's `cmd` won't do anything right now, or null if it will. */
+  unavailable(cmd: string): string | null {
+    switch (cmd) {
+      case 'play': return this.c.graph?.balls().length ? null : 'Open the graph view for it to play in';
+      case 'nibble': return this.opts.nibble ? null : 'Letter stealing is off in settings';
+      case 'eat': return BUG_KINDS.some((k) => this.allows(k)) ? null : 'All the bugs are switched off in settings';
+      case 'prank': return this.c.pranks?.targets().some((t) => t.kind === 'mischief') ? null : 'Nothing to get up to here';
+    }
+    return null;
+  }
+
+  /** A note showing in the main area, for it to explore. */
+  private shownNote() {
+    return [...this.win.document.querySelectorAll<HTMLElement>('.mod-root .workspace-leaf-content:is([data-type="markdown"], [data-type="butter-editor"]) .view-content')].find((e) => e.offsetParent !== null) ?? null;
+  }
 
   /**
    * A command from the pet panel: sleep, wake, explore, scout, eat, play, pushups, bask,
@@ -301,6 +322,8 @@ export class PetEngine {
     if (!this.brain) return null;
     if (cmd === 'come') { this.summon(); return null; }
     if (cmd === 'scout') { this.noteChanged(true); return null; }
+    // Explore the note that's showing, if there is one; otherwise just go exploring.
+    if (cmd === 'explore' && this.shownNote()) { this.noteChanged(true); return null; }
     const kinds = BUG_KINDS.filter((k) => this.allows(k));
     if (cmd === 'eat' && !kinds.length) return 'All the bugs are switched off in settings';
     const said = this.brain.command(cmd);
@@ -353,7 +376,39 @@ export class PetEngine {
   }
 
   /** Is the CSS point (x, y) on the pet — and not on a panel it is hiding under? */
-  private hitsPet(x: number, y: number) {
+  /**
+   * Where its emotes (Z's, the heart, the "!") go, CSS px: the middle of their bottom edge.
+   * Just above the head, but never over any of it: of a few spots across and above the
+   * head, the nearest that's clear of everything drawn of the body (with a gap). It keeps
+   * a spot while it stays clear and isn't much further than the best, and eases from one
+   * to the next, so the emote doesn't jump about; but never so slowly it overlaps.
+   */
+  private emoteSpot(head: { x: number; y: number }, res: number) {
+    const px = this.opts.px, k = res / px, hx = head.x * px, hy = head.y * px, W = 14, H = 14, GAP = 4;
+    const clear = (x: number, y: number) => this.renderer.clearOf((x - W / 2 - GAP) * k, (y - H - GAP) * k, (x + W / 2 + GAP) * k, (y + GAP) * k);
+    let best: { dx: number; dy: number; d: number } | null = null;
+    for (const dx of [0, -10, 10, -18, 18]) {
+      for (let dy = -4; dy >= -40; dy -= 2) {
+        if (!clear(hx + dx, hy + dy)) continue;
+        const d = Math.hypot(dx, dy * 1.2);
+        if (!best || d < best.d) best = { dx, dy, d };
+        break;
+      }
+    }
+    const keep = this.emoteAt, keepD = Math.hypot(keep.dx, keep.dy * 1.2);
+    if (best && !(clear(hx + keep.dx, hy + keep.dy) && keepD < best.d + 6)) this.emoteAt = best;
+    const to = { x: hx + this.emoteAt.dx, y: hy + this.emoteAt.dy }, at = this.emoteFrom;
+    let next = at && Math.hypot(to.x - at.x, to.y - at.y) < 40 ? { x: at.x + (to.x - at.x) * 0.3, y: at.y + (to.y - at.y) * 0.3 } : to;
+    if (!clear(next.x, next.y)) next = to;
+    this.emoteFrom = next;
+    // Which way rising Z's drift: away from the head.
+    return { ...next, side: this.emoteAt.dx < 0 ? -1 : 1 };
+  }
+  private emoteAt = { dx: 0, dy: -14 };
+  private emoteFrom: { x: number; y: number } | null = null;
+
+  /** Is (x, y), CSS px, on the pet? */
+  hits(x: number, y: number) {
     if (!this.brain) return false;
     const ax = x / this.opts.px, ay = y / this.opts.px;
     if (this.body.under && this.world.coverAt(ax, ay)) return false;
@@ -369,10 +424,12 @@ export class PetEngine {
   /** Canvas pixels per art px: the gecko is drawn this much finer than it is simulated. */
   private res = 1;
 
+
   private resize() {
     const px = this.opts.px, dpr = this.win.devicePixelRatio || 1;
     // Each canvas pixel is a whole number of device pixels, so the art stays crisp.
-    const cpx = Math.max(1, Math.round((px / (this.opts.detail ?? 1)) * dpr)) / dpr;
+    // (Rounding down, so a size between whole pixels is never drawn coarser than its art.)
+    const cpx = Math.max(1, Math.floor((px / (this.opts.detail ?? 1)) * dpr + 1e-6)) / dpr;
     this.res = px / cpx;
     const w = Math.ceil(this.win.innerWidth / cpx), h = Math.ceil(this.win.innerHeight / cpx);
     this.canvas.width = w;
@@ -478,7 +535,8 @@ export class PetEngine {
     this.renderer.draw(g, this.body, pal, res);
     const zFrom = { x: this.renderer.headAt.x / res, y: this.renderer.headAt.y / res };
     // Fast asleep: Z's.
-    this.zzz.draw(pal, this.brain.dozing ? { x: zFrom.x * this.opts.px, y: zFrom.y * this.opts.px } : null, performance.now(), this.opts.px);
+    const spot = this.emoteSpot(zFrom, res);
+    this.zzz.draw(pal, this.brain.dozing ? spot : null, this.brain.petted ? spot : null, performance.now(), this.opts.px, this.brain.alarm > 0 ? spot : null);
     if (this.brain.carrying) {
       const s = this.brain.snout(), px = this.opts.px;
       this.reactions.hold((s.x + 0.5) * px, (s.y + 0.5) * px, this.body.headAngle);

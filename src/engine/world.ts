@@ -66,6 +66,9 @@ export interface Edge { x1: number; y1: number; x2: number; y2: number; len: num
 /** A way under a panel: a point on its exposed edge, the inward normal, and how deep it goes. */
 export interface CoverEntry { x: number; y: number; nx: number; ny: number; depth: number; }
 
+/** A code block or callout, for napping on (art px). */
+export interface Rock extends Rect { kind: 'code block' | 'callout'; }
+
 export class World {
   px = 3;
   bounds: Rect = { x: 0, y: 0, w: 100, h: 100 };
@@ -74,7 +77,7 @@ export class World {
   /** Panels the gecko can hide under. */
   covers: Rect[] = [];
   /** Code blocks and callouts in the note: flat stones it can nap on. */
-  rocks: Rect[] = [];
+  rocks: Rock[] = [];
   /** The open side panels: safe high ground to run to. */
   sidebars: Rect[] = [];
   /** Blocks of text on screen (paragraphs, headings, list runs). */
@@ -343,7 +346,7 @@ export class World {
   }
 
   /** The code block or callout over (x, y), if any. */
-  rockAt(x: number, y: number): Rect | null {
+  rockAt(x: number, y: number): Rock | null {
     for (const r of this.rocks) if (x > r.x && x < r.x + r.w && y > r.y && y < r.y + r.h) return r;
     return null;
   }
@@ -352,21 +355,21 @@ export class World {
    * Code blocks and callouts on screen, in reading view and live preview (where a code
    * block is a run of line elements, merged here into one stone).
    */
-  private scanRocks(): Rect[] {
+  private scanRocks(): Rock[] {
     const doc = this.win.document, vh = this.win.innerHeight;
-    const rects: DOMRect[] = [];
+    const rects: { r: DOMRect; kind: Rock['kind'] }[] = [];
     // In any note on screen, not just the one in focus (clicking a side panel moves the focus).
     doc.querySelectorAll<HTMLElement>('.workspace-leaf .markdown-rendered pre, .workspace-leaf .callout, .workspace-leaf .HyperMD-codeblock').forEach((el) => {
       const r = el.getBoundingClientRect();
-      if (r.width > 0 && r.bottom > 0 && r.top < vh) rects.push(r);
+      if (r.width > 0 && r.bottom > 0 && r.top < vh) rects.push({ r, kind: el.matches('.callout') ? 'callout' : 'code block' });
     });
-    const out: Rect[] = [];
-    for (const r of rects.sort((a, b) => a.top - b.top)) {
+    const out: Rock[] = [];
+    for (const { r, kind } of rects.sort((a, b) => a.r.top - b.r.top)) {
       const prev = out[out.length - 1];
       if (prev && Math.abs(prev.x - r.left) < 2 && r.top <= prev.y + prev.h + 2) { prev.h = Math.max(prev.h, r.bottom - prev.y); prev.w = Math.max(prev.w, r.width); continue; }
-      out.push({ x: r.left, y: r.top, w: r.width, h: r.height });
+      out.push({ x: r.left, y: r.top, w: r.width, h: r.height, kind });
     }
-    return out.map((r) => this.toArt(r)).filter((r) => r.w >= 16 && r.h >= 6 && !this.coverAt(r.x + r.w / 2, r.y + r.h / 2));
+    return out.map((r) => ({ ...this.toArt(r), kind: r.kind })).filter((r) => r.w >= 16 && r.h >= 6 && !this.coverAt(r.x + r.w / 2, r.y + r.h / 2));
   }
 
   onText(x: number, y: number, pad = 0) {

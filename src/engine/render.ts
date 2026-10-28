@@ -1,6 +1,6 @@
 import { Body, HIP, Leg, NEARER, SPINE } from './body';
 import type { Palette } from './palette';
-import { clamp, lerp } from './math';
+import { clamp, lerp, smoothstep } from './math';
 
 /*
  * Pixel renderer for the gecko, in the flat two-tone style of classic lizard sprites:
@@ -107,6 +107,17 @@ const LIGHT = { x: -0.6, y: -0.8 };
 
 export class GeckoRenderer {
   private depth = new Float32Array(0);
+  private legsDrawn: LegPixel[] = [];
+
+  /** Is the canvas-px box from (x0, y0) to (x1, y1) clear of everything drawn of the body and legs last frame? */
+  clearOf(x0: number, y0: number, x1: number, y1: number) {
+    const { bx, by, bw, bh, depth } = this;
+    for (let y = Math.max(0, Math.floor(y0 - by)); y < Math.min(bh, Math.ceil(y1 - by)); y++) {
+      for (let x = Math.max(0, Math.floor(x0 - bx)); x < Math.min(bw, Math.ceil(x1 - bx)); x++) if (depth[y * bw + x] > 0) return false;
+    }
+    for (const p of this.legsDrawn) if (p.x + p.w > x0 && p.x < x1 && p.y + p.w > y0 && p.y < y1) return false;
+    return true;
+  }
   private seg = new Int16Array(0);
   private lat = new Float32Array(0);
   private shadow = new Uint8Array(0);
@@ -115,8 +126,10 @@ export class GeckoRenderer {
   private bx = 0;
   private by = 0;
   /**
-   * How much the animal's left side faces the light, -1..1, eased over a few frames so the
-   * wiggle of the gait doesn't flicker it.
+   * How much the animal's left side faces the light, -1..1, eased so the wiggle of the gait
+   * doesn't flicker it: slowly through the small swings of its heading as it walks (which,
+   * heading nearly along the light, would otherwise slide the edge of the shade back and
+   * forth across its back with every step), quickly when it really turns.
    */
   private light = 1;
   private bend = new Float32Array(SPINE);
@@ -166,7 +179,8 @@ export class GeckoRenderer {
     // between its lit and shaded halves sweeps across it: the shaded side narrows to its
     // edge and the light comes round, rather than the two sides swapping at once.
     const toLight = -Math.sin(b.heading) * LIGHT.x + Math.cos(b.heading) * LIGHT.y;
-    this.light += (toLight - this.light) * 0.2;
+    const swing = Math.abs(toLight - this.light);
+    this.light += (toLight - this.light) * (0.012 + 0.25 * smoothstep(clamp((swing - 0.15) / 0.35, 0, 1)));
 
     // Art px in, canvas pixels out.
     const tilt = this.tilt && this.tilt.amount > 0 ? this.tilt : null;
@@ -219,6 +233,7 @@ export class GeckoRenderer {
     if (this.steadyHead && this.tiltA <= 0.6) this.taperSnout(b, project, res);
     if (this.tiltA > 0.6) this.narrowDome(b, project, res);
     const legs = this.legPixels(b, pal, project, this.snapped, res);
+    this.legsDrawn = legs;
 
     // The shadow: the body at its true size on the ground, each part offset by its height.
     const { bw, bh, bx, by } = this;

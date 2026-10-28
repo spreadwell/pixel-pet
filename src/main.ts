@@ -1,7 +1,9 @@
 import { Editor, MarkdownFileInfo, MarkdownView, Platform, Plugin, TFile } from 'obsidian';
 import { PetEngine, PetOptions } from './engine/engine';
+import { showPetMenu } from './actions';
+import { Diary } from './diary';
 import { BUG_KINDS, BugKind } from './engine/bugs';
-import { rollTraits } from './engine/personality';
+import { DiaryKind, rollTraits } from './engine/personality';
 import { GraphBalls } from './graph';
 import { PANEL_VIEW, PetPanel } from './panel';
 import { WorkspacePranks } from './pranks';
@@ -20,6 +22,10 @@ export default class PixelPetPlugin extends Plugin {
   private nextAlone: Partial<Record<BugKind, { at: number; minutes: number }>> = {};
   private pending = new Map<string, number>();
   private graph = new GraphBalls(this.app);
+  /** What it has been up to, for the pet panel. */
+  readonly diary = new Diary();
+  /** The note opened last (the active one, when the panel has the focus, isn't). */
+  private lastNote: string | undefined;
   private pranks = new WorkspacePranks(this.app, () => BUG_KINDS.some((k) => this.settings.critters[k].enabled));
 
   async onload() {
@@ -33,11 +39,18 @@ export default class PixelPetPlugin extends Plugin {
       const kinds = BUG_KINDS.filter((k) => this.settings.critters[k].enabled);
       if (kinds.length) this.engine?.spawnBug(kinds[Math.floor(Math.random() * kinds.length)]);
     } });
-    this.registerView(PANEL_VIEW, (leaf) => new PetPanel(leaf, () => this.engine));
+    this.registerView(PANEL_VIEW, (leaf) => new PetPanel(leaf, () => this.engine, this.diary, () => this.openSettings()));
+    // Right-click the pet for its own menu.
+    this.registerDomEvent(window, 'contextmenu', (e) => {
+      if (!this.engine?.hits(e.clientX, e.clientY)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      showPetMenu(e, this.engine, { diary: () => void this.openPanel(), settings: () => this.openSettings() });
+    }, { capture: true });
     this.addCommand({ id: 'open-panel', name: 'Open pet panel', callback: () => this.openPanel() });
 
     this.registerEvent(this.app.workspace.on('css-change', () => this.engine?.refreshPalette()));
-    this.registerEvent(this.app.workspace.on('file-open', () => this.engine?.noteChanged()));
+    this.registerEvent(this.app.workspace.on('file-open', (file) => { if (file) this.lastNote = file.basename; this.engine?.noteChanged(); }));
     this.registerEvent(this.app.workspace.on('active-leaf-change', () => this.engine?.noteChanged()));
     this.registerEvent(this.app.workspace.on('editor-change', (editor: Editor, info: MarkdownView | MarkdownFileInfo) => this.onEdit(editor, info)));
     // Editors that don't raise editor-change (Butter Editor, say) still save the note.
@@ -59,6 +72,19 @@ export default class PixelPetPlugin extends Plugin {
       this.settings.traits = rollTraits();
       await this.saveData(this.settings);
     }
+  }
+
+  /** Pixel Pet's settings. */
+  openSettings() {
+    const setting = (this.app as unknown as { setting?: { open(): void; openTabById(id: string): void } }).setting;
+    setting?.open();
+    setting?.openTabById(this.manifest.id);
+  }
+
+  /** Into the diary, with the note it happened in where that matters. */
+  private noteDiary(kind: DiaryKind, text: string) {
+    const inNote = kind === 'explore' || kind === 'nap' || kind === 'letter';
+    this.diary.add(kind, text, inNote ? this.app.workspace.getActiveFile()?.basename ?? this.lastNote : undefined);
   }
 
   /** A whole new personality, rolled afresh. */
@@ -90,6 +116,7 @@ export default class PixelPetPlugin extends Plugin {
       reducedMotion: reduced,
       graph: this.graph,
       pranks: this.pranks,
+      onDiary: (kind, text) => this.noteDiary(kind, text),
     };
   }
 

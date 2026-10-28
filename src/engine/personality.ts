@@ -6,7 +6,7 @@ import type { NibbleTarget, Nibbler } from './nibble';
 import type { Palette } from './palette';
 import type { Reactions } from './reactions';
 import { Waypoint, findRoute } from './route';
-import type { CoverEntry, World } from './world';
+import type { CoverEntry, Rock, World } from './world';
 
 // ═══════════════════════════════════════════════════════════════════
 // PERSONALITY
@@ -94,7 +94,12 @@ export interface Ctx {
   graph?: Playground | null;
   /** Buttons on screen it could press. */
   pranks?: Pranks | null;
+  /** Something worth putting in its diary happened. */
+  log?: (kind: DiaryKind, text: string) => void;
 }
+
+/** The kinds of thing its diary records. */
+export type DiaryKind = 'catch' | 'letter' | 'nap' | 'sleep' | 'play' | 'prank' | 'snack' | 'explore' | 'retreat' | 'petted' | 'held' | 'startle' | 'pushups' | 'bask';
 
 /**
  * A button on screen it could press (art px): where to press it, and what pressing it
@@ -112,8 +117,8 @@ export interface PrankTarget {
   hover(on: boolean): void;
   /** Pressed down (true), and let go (false): the button shows it pressed. */
   down(on: boolean): void;
-  /** Let go of, the press complete: whatever the button does. */
-  press(): void;
+  /** Let go of, the press complete: whatever the button does, and what it did (for the diary). */
+  press(): string | void;
 }
 export interface Pranks {
   /** What it could press now; a prank it owes putting right comes first, marked `due`. */
@@ -292,6 +297,8 @@ class HeadLookBehavior {
   offset = 0; target = 0;
   look() { this.target = (Math.random() - 0.5) * 1.2; }
   lookAt(rel: number) { this.target = clamp(rel, -0.9, 0.9); }
+  /** Whip round to look, at once. */
+  snapTo(rel: number) { this.target = this.offset = clamp(rel, -0.9, 0.9); }
   update() {
     this.offset = lerp(this.offset, this.target, 0.08);
     if (Math.abs(this.offset - this.target) < 0.02) this.target = lerp(this.target, 0, 0.05);
@@ -348,6 +355,7 @@ const StateHandlers: Record<State, Handler> = {
 
   [STATE.BASKING]: {
     enter(g) {
+      if (!g.petted) g.c.log?.('bask', 'Basked');
       const nearHome = g.distTo(g.homeX, g.homeY) < 80 * S;
       const baseDur = g.traits.resolve('baskDuration');
       const fullBonus = nearHome && g.needs.hunger > 70 ? g.needs.fullness * baseDur * 1.5 : 0;
@@ -512,31 +520,76 @@ const StateHandlers: Record<State, Handler> = {
     },
   },
 
+  // Startled, as a lizard is: a flinch — it jumps, a quick hop straight up off all four
+  // feet and down again, head whipping round to the threat, tail lashing, a "!" over its
+  // head — then dead still for a beat, eyes on it (a jumpy one holds it less), before it
+  // bolts. A mild scare (or reduced motion) skips the jump.
   [STATE.STARTLE]: {
-    enter(g) { g.stateData = { freezeDuration: 10 + Math.random() * 15 }; },
+    enter(g) {
+      const head = g.head, aware = g.traits.traits.awareness ?? 0.5;
+      g.stateData = { freeze: 8 + (1 - aware) * 14 + Math.random() * 8 };
+      g.headLook.snapTo(angleDiff(g.angle, Math.atan2(g.threatY - head.y, g.threatX - head.x)));
+      g.currentSpeed = 0;
+      g.alarm = 40;
+      g.c.log?.('startle', 'Was startled');
+    },
     update(g) {
-      if (g.stateTimer > g.stateData.freezeDuration) return { targetSpeed: 0, transition: STATE.FLEE };
+      const t = g.stateTimer, sd = g.stateData, b = g.body;
+      // Frozen: not turning, not stepping; only the head moves, to keep its eyes on it.
+      g.targetAngle = g.angle;
+      g.currentSpeed = 0;
+      // The jump: up fast, and down a touch slower.
+      if (!g.mildScare) b.hop = t < 3 ? 2.4 * (t / 3) : t < 8 ? 2.4 * (1 - smoothstep((t - 3) / 5)) : 0;
+      g.headLook.lookAt(angleDiff(g.angle, Math.atan2(g.threatY - g.head.y, g.threatX - g.head.x)));
+      if (t > 8 + sd.freeze) { b.hop = 0; return { targetSpeed: 0, transition: STATE.FLEE }; }
       return { targetSpeed: 0 };
     },
   },
 
+  // Bolting: off at full tilt from the first stride, away from the threat in sharp
+  // zig-zag jinks; then it pulls up, looks back at where the scare came from, tastes the
+  // air, and (a bold one, sometimes) bobs a few push-ups at it before it settles.
   [STATE.FLEE]: {
     enter(g) {
       const baseFlee = g.traits.resolve('fleeDuration');
-      g.stateData = { duration: (baseFlee + Math.random() * baseFlee) * (g.mildScare ? 0.5 : 1) };
-      const head = g.head;
-      g.targetAngle = Math.atan2(head.y - g.threatY, head.x - g.threatX) + (Math.random() - 0.5) * 0.8;
-      g.angle = lerpAngle(g.angle, g.targetAngle, 0.5);
+      const head = g.head, away = Math.atan2(head.y - g.threatY, head.x - g.threatX);
+      g.stateData = { duration: (baseFlee + Math.random() * baseFlee) * (g.mildScare ? 0.5 : 1), away, jink: 0, nextJink: 0, phase: 'run', look: 0, lookFor: 0 };
+      g.targetAngle = away + (Math.random() - 0.5) * 0.6;
+      g.angle = lerpAngle(g.angle, g.targetAngle, 0.6);
+      if (!g.mildScare && !g.c.opts.reducedMotion) g.currentSpeed = g.speed * g.traits.resolve('fleeMultiplier');
     },
     update(g) {
+      const sd = g.stateData, t = g.stateTimer, head = g.head;
       // Bolt for the nearest panel leading away from the threat, if there is one.
-      if (HIDING && g.stateTimer === 1 && g.findCover(110, { x: g.threatX, y: g.threatY })) { g.hideFast = true; return { targetSpeed: g.speed, transition: STATE.HIDE }; }
-      const mult = g.mildScare || g.c.opts.reducedMotion ? 1.2 : g.traits.resolve('fleeMultiplier');
-      const targetSpeed = g.speed * mult;
-      g.targetAngle += Math.sin(g.burstTimer * 0.3) * 0.15;
+      if (HIDING && t === 1 && g.findCover(110, { x: g.threatX, y: g.threatY })) { g.hideFast = true; return { targetSpeed: g.speed, transition: STATE.HIDE }; }
+      const mild = g.mildScare || g.c.opts.reducedMotion;
+      if (sd.phase === 'look') {
+        // Pulled up short: a look back over its shoulder at where it came from.
+        g.currentSpeed *= 0.8;
+        g.targetAngle = g.angle;
+        g.headLook.lookAt(angleDiff(g.angle, Math.atan2(g.threatY - head.y, g.threatX - head.x)));
+        if (++sd.look === 20) g.flick();
+        if (sd.look > sd.lookFor) {
+          const bold = (g.traits.traits.aggression ?? 0.5) > 0.55;
+          if (bold && !mild && Math.random() < 0.5) { g.enterState(STATE.IDLE); g.schedulePushups(6); return { targetSpeed: 0 }; }
+          return { targetSpeed: 0, transition: STATE.IDLE };
+        }
+        return { targetSpeed: 0 };
+      }
+      const mult = mild ? 1.2 : g.traits.resolve('fleeMultiplier');
+      // Sharp jinks one way and the other, every few strides.
+      if (!mild && t >= sd.nextJink) {
+        sd.jink = (sd.jink > 0 ? -1 : 1) * (0.3 + Math.random() * 0.4);
+        sd.nextJink = t + 12 + Math.random() * 10;
+      }
+      g.targetAngle = sd.away + (mild ? Math.sin(g.burstTimer * 0.3) * 0.15 : sd.jink);
       g.steerFromWalls(20 * S, 0.5);
-      if (g.stateTimer > g.stateData.duration) return { targetSpeed, transition: STATE.IDLE };
-      return { targetSpeed };
+      // Keep running away from it, even when a wall turns it.
+      sd.away = lerpAngle(sd.away, g.targetAngle, 0.05);
+      if (t > sd.duration) { sd.phase = 'look'; sd.look = 0; sd.lookFor = 45 + Math.random() * 45; return { targetSpeed: 0 }; }
+      // Easing off over the last few strides.
+      const left = sd.duration - t;
+      return { targetSpeed: g.speed * mult * (left < 15 ? 0.4 + 0.6 * (left / 15) : 1) };
     },
   },
 
@@ -560,7 +613,7 @@ const StateHandlers: Record<State, Handler> = {
       if (g.sleepPeeking && t > sd.peekUntil) g.sleepPeeking = false;
       // Curled up with its eyes shut, it's asleep: and once it is, it stays asleep a good
       // while (a pointer coming at it still wakes it with a start).
-      if (!sd.asleepAt && (g.dozing || t > 240)) sd.asleepAt = t;
+      if (!sd.asleepAt && (g.dozing || t > 240)) { sd.asleepAt = t; g.c.log?.('sleep', 'Fell asleep'); }
       if (!sd.asleepAt || t - sd.asleepAt < MIN_SLEEP) return { targetSpeed: 0 };
       // While you're away it stays asleep; when you come back it wakes shortly after.
       if (g.userIdle) { sd.duration = Math.max(sd.duration, t + 60); g.needs.sleepiness = Math.max(g.needs.sleepiness, 0.5); sd.wakeAt = 0; }
@@ -818,6 +871,7 @@ const StateHandlers: Record<State, Handler> = {
     enter(g) {
       g.stateData = { stops: g.scoutStops, i: 0, pause: 0, leg: 0 };
       g.flick();
+      g.c.log?.('explore', 'Explored');
     },
     update(g) {
       const sd = g.stateData, head = g.head;
@@ -847,6 +901,7 @@ const StateHandlers: Record<State, Handler> = {
       g.stateData = { spot: g.retreatTo!, out: g.retreatOut!, phase: 'run', wait: 150 + Math.random() * 200 };
       g.planRoute(g.retreatTo!.x, g.retreatTo!.y);
       g.flick();
+      g.c.log?.('retreat', 'Hid on the side panel');
     },
     update(g) {
       const sd = g.stateData, head = g.head;
@@ -885,7 +940,7 @@ const StateHandlers: Record<State, Handler> = {
       const sd = g.stateData, pg = g.c.graph, head = g.head, b = g.body;
       if (sd.phase === 'proud') {
         // Played out: a few push-ups, pleased with itself.
-        sd.t++;
+        if (++sd.t === 1) g.c.log?.('play', 'Played with the graph');
         b.pushup = 2.4 * Math.max(0, Math.sin((sd.t / 30) * Math.PI)) * (sd.t < 90 ? 1 : 0);
         if (sd.t > 110) { b.pushup = 0; g.playCooldown = 2400 + Math.random() * 2400; return { targetSpeed: 0, transition: STATE.IDLE }; }
         return { targetSpeed: 0 };
@@ -1048,7 +1103,11 @@ const StateHandlers: Record<State, Handler> = {
             else g.mischiefCooldown = g.mischiefGap();
             g.c.particles.burst(sd.at.x, sd.at.y, g.c.pal.ink, 5, 16);
           }
-          if (sd.t === 86) { t.down(false); if (t.ok()) t.press(); }
+          if (sd.t === 86) {
+            t.down(false);
+            const did = t.ok() ? t.press() : undefined;
+            if (did) g.c.log?.(t.kind === 'food' ? 'snack' : 'prank', did);
+          }
           if (sd.t === 108) { t.hover(false); g.pressing = null; }
           if (sd.t >= 120) {
             b.reach = null; b.pushup = 0;
@@ -1116,7 +1175,7 @@ const StateHandlers: Record<State, Handler> = {
           sd.droop = ease(92, 30);
           sd.lids = ease(122, 10) * 0.5 + ease(146, 20) * 0.5;
           if (sd.t === 40) g.flick();
-          if (sd.t >= 170) { sd.phase = 'asleep'; sd.t = 0; }
+          if (sd.t >= 170) { sd.phase = 'asleep'; sd.t = 0; g.c.log?.('nap', `Napped on a ${g.napRock?.kind ?? 'code block'}`); }
           break;
         case 'wake': {
           // Waking, it steps out of it: the eye opens and it lies a moment, tasting the air;
@@ -1352,6 +1411,8 @@ export class Personality {
   retreatOut: { x: number; y: number } | null = null;
   /** Ticks until it will start another game with the graph. */
   playCooldown = 0;
+  /** A "!" over its head for this many ticks more: it just got a fright. */
+  alarm = 0;
   /** Not up to anything for this many ticks yet (a little under the usual gap, to begin with). */
   mischiefCooldown: number;
 
@@ -1412,7 +1473,7 @@ export class Personality {
   }
 
   /** The block it means to nap on. */
-  napRock: Rect | null = null;
+  napRock: Rock | null = null;
   /** Ticks until it will nap on a block again. */
   napCooldown = 0;
 
@@ -1425,7 +1486,7 @@ export class Personality {
   /** The nearest code block or callout on screen it could nap on, within `range` (into napRock). */
   findNapRock(range: number) {
     const w = this.c.world, h = this.head;
-    let best: Rect | null = null;
+    let best: Rock | null = null;
     for (const r of w.rocks) {
       // Big enough to curl up on, and on screen.
       if (r.w < 36 || r.h < 10 || !w.inBounds(r.x + r.w / 2, r.y + r.h / 2, 8)) continue;
@@ -1456,6 +1517,7 @@ export class Personality {
     const d = this.display, b = this.body;
     if (!d || this.stateTimer < d.at) { b.pushup = 0; return false; }
     const BOB = 32, t = this.stateTimer - d.at;
+    if (t === 0) this.c.log?.('pushups', 'Did push-ups');
     if (t >= BOB * d.bobs) {
       this.display = null;
       b.pushup = 0;
@@ -1708,6 +1770,7 @@ export class Personality {
 
   /** Lifted off the ground by the user. */
   pickUp() {
+    this.c.log?.('held', 'Was picked up');
     this.dropLetter();
     this.cover = null;
     this.forcedNap = false;
@@ -1908,6 +1971,7 @@ export class Personality {
     const t = this.letter;
     this.dropLetter();
     if (!t || !this.c.nibbler.bite(t)) return false;
+    this.c.log?.('letter', `Stole the letter “${t.ch}”`);
     this.c.reactions.carry(t.range, t.ch, stuck);
     this.carrying = true;
     this.body.flickTongue();
@@ -1933,6 +1997,8 @@ export class Personality {
 
   get stateName() { return this.state + (this.petted ? '+petted' : ''); }
 
+  get asleep() { return this.state === STATE.SLEEP || this.state === STATE.NAP; }
+
   /** What it's up to, in a few words, for the pet panel. */
   get activity(): string {
     const s = this.state, sd = this.stateData;
@@ -1941,21 +2007,21 @@ export class Personality {
       case STATE.IDLE: return 'Looking around';
       case STATE.BASKING: return 'Basking';
       case STATE.EXPLORE: return 'Exploring';
-      case STATE.HUNT: return 'Hunting';
+      case STATE.HUNT: return `Hunting a ${this.preyKind}`;
       case STATE.FEAST: return 'Eating';
-      case STATE.STARTLE: case STATE.FLEE: return 'Spooked';
+      case STATE.STARTLE: case STATE.FLEE: return 'Startled';
       case STATE.SLEEP: return 'Asleep';
-      case STATE.NAP: return sd.phase === 'asleep' ? 'Napping' : sd.phase === 'wake' ? 'Waking up' : 'Settling down for a nap';
-      case STATE.NIBBLE: return 'After a letter';
+      case STATE.NAP: return sd.phase === 'asleep' ? 'Napping' : sd.phase === 'wake' ? 'Waking up' : 'Lying down for a nap';
+      case STATE.NIBBLE: return 'Going after a letter';
       case STATE.HELD: return 'Being held';
       case STATE.WATCH: return 'Watching';
-      case STATE.INSPECT: return 'Sniffing your words';
+      case STATE.INSPECT: return 'Reading what you wrote';
       case STATE.LURK: return sd.target === 'caret' ? 'Watching you type' : 'Watching your pointer';
       case STATE.CURIOUS: return 'Curious';
       case STATE.SCOUT: return 'Exploring the note';
-      case STATE.RETREAT: return 'Lying low on the side panel';
+      case STATE.RETREAT: return 'Hiding on the side panel';
       case STATE.PLAY: return 'Playing';
-      case STATE.PRANK: return sd.target?.kind === 'food' ? 'Asking for something to eat' : 'Up to something';
+      case STATE.PRANK: return sd.target?.kind === 'food' ? 'Asking for food' : 'Up to something';
       default: return s;
     }
   }
@@ -2075,6 +2141,7 @@ export class Personality {
       if (bd < 10 * S && bug.catchable && this.state !== STATE.FEAST) {
         bug.alive = false;
         this.needs.feed(bug.kind === 'cricket' ? 40 : 15);
+        this.c.log?.('catch', `Caught a ${bug.kind}`);
         this.c.particles.burst(bug.x, bug.y, this.c.pal.wing, bug.kind === 'cricket' ? 5 : 4, 14);
         this.preyKind = bug.kind;
         this.enterState(STATE.FEAST);
@@ -2092,13 +2159,18 @@ export class Personality {
 
   private updatePetting() {
     const p = this.pointer, st = this.state;
-    // Petting: a pointer held still on it, out in the open (by the words it scurries off instead).
+    // Petting: a pointer held still on it, or stroking it gently back and forth, out in the
+    // open (by the words it scurries off instead). A stroke runs a little past its edges.
     const calm = (st === STATE.IDLE || st === STATE.BASKING || st === STATE.EXPLORE || st === STATE.SLEEP || st === STATE.LURK || st === STATE.CURIOUS)
       && !(st === STATE.LURK && this.stateData.target === 'caret') && !this.nearText();
-    const over = !!p && calm && this.cursorSpeed < 1.5 * S && this.bodyDistance(p.x, p.y) < 1.5;
-    this.petTimer = over ? Math.min(40, this.petTimer + 1) : Math.max(0, this.petTimer - 2);
+    const d = p ? this.bodyDistance(p.x, p.y) : Infinity, v = this.cursorSpeed;
+    const resting = d < 1.5 && v < 1.5 * S;
+    const stroking = d < 3.5 && v > 0.1 && v < Math.min(2.5 * S, this.traits.resolve('startleSpeed') * S * 0.6);
+    const over = !!p && calm && (resting || stroking);
+    this.petTimer = over ? Math.min(40, this.petTimer + 1) : Math.max(0, this.petTimer - (p && d < 6 ? 1 : 2));
     const was = this.petted;
     this.petted = this.petTimer > 20;
+    if (this.petted && !was) this.c.log?.('petted', 'Was petted');
     if (this.petted && !was && st !== STATE.SLEEP && st !== STATE.BASKING) this.enterState(STATE.BASKING);
     if (!this.petted && was && this.state === STATE.BASKING && Math.random() < 0.6) this.body.flickTongue('lick');
   }
@@ -2163,6 +2235,7 @@ export class Personality {
     if (this.hideCooldown > 0) this.hideCooldown--;
     if (this.playCooldown > 0) this.playCooldown--;
     if (this.mischiefCooldown > 0) this.mischiefCooldown--;
+    if (this.alarm > 0) this.alarm--;
     if (this.snackCooldown > 0) this.snackCooldown--;
     if (this.napCooldown > 0) this.napCooldown--;
     this.typing = c.input.typedWithin(c.now, 3500);
@@ -2211,7 +2284,7 @@ export class Personality {
     let targetSpeed = result.targetSpeed;
     if (this.state !== STATE.FLEE && this.state !== STATE.STARTLE) targetSpeed *= this.needs.fullnessSlowdown;
     if (this.petted) targetSpeed = 0;
-    const turnRate = this.state === STATE.HUNT ? (this.stateData.phase === 'lunge' ? 0.3 : 0.08) : this.state === STATE.SLEEP ? 0.02 : 0.06;
+    const turnRate = this.state === STATE.HUNT ? (this.stateData.phase === 'lunge' ? 0.3 : 0.08) : this.state === STATE.SLEEP ? 0.02 : this.state === STATE.FLEE && !this.mildScare && !this.c.opts.reducedMotion ? 0.2 : 0.06;
     this.angle += angleDiff(this.angle, this.targetAngle) * turnRate;
     this.currentSpeed = lerp(this.currentSpeed, targetSpeed, 0.05);
 
@@ -2222,12 +2295,13 @@ export class Personality {
     b.lidTarget = sleeping ? (this.sleepPeeking ? 0.25 : 1) : this.state === STATE.NAP && this.stateData.lids ? this.stateData.lids : this.petted ? 0.55 : 0;
     b.breathRate = sleeping || napping || this.state === STATE.BASKING || this.petted ? 0.29 : 0.57;
     b.breathDepth = sleeping ? 0.085 : 0.05;
-    b.tailTwitch = this.state === STATE.HUNT && this.stateData.phase === 'ready' ? 1 : this.state === STATE.PLAY ? 0.8 : this.state === STATE.PRANK && this.stateData.phase === 'raise' ? 0.6 : this.state === STATE.HELD ? 0.8 : this.state === STATE.LURK && (this.stateData.frozen || this.stateData.phase === 'wary') ? 0.5 : this.state === STATE.NIBBLE && this.stateData.phase === 'grab' && this.stateData.stuck ? 0.6 : this.state === STATE.HUNT ? 0.7 : this.state === STATE.STARTLE ? 0.35 : 0;
+    b.tailTwitch = this.state === STATE.HUNT && this.stateData.phase === 'ready' ? 1 : this.state === STATE.PLAY ? 0.8 : this.state === STATE.PRANK && this.stateData.phase === 'raise' ? 0.6 : this.state === STATE.HELD ? 0.8 : this.state === STATE.LURK && (this.stateData.frozen || this.stateData.phase === 'wary') ? 0.5 : this.state === STATE.NIBBLE && this.stateData.phase === 'grab' && this.stateData.stuck ? 0.6 : this.state === STATE.HUNT ? 0.7 : this.state === STATE.STARTLE ? (this.stateTimer < 10 ? 1 : 0) : 0;
     if (this.mouthTicks > 0) { this.mouthTicks--; b.mouthTarget = this.mouthTicks > 4 ? 1 : 0.4; }
     else if (this.state !== STATE.NIBBLE && this.state !== STATE.HUNT && this.state !== STATE.FEAST) b.mouthTarget = 0;
     if (this.state !== STATE.HUNT && this.state !== STATE.PLAY) b.wiggle = 0;
     if (this.state !== STATE.FEAST) b.gulp = -1;
     if (this.state !== STATE.IDLE && this.state !== STATE.BASKING) { this.display = null; if (this.state !== STATE.NAP && this.state !== STATE.PLAY && this.state !== STATE.PRANK) b.pushup = 0; }
+    if (this.state !== STATE.STARTLE) b.hop = 0;
     if (this.state !== STATE.PRANK) {
       b.reach = null;
       // Off it went mid-press (after a fly, say): the button goes back to normal.

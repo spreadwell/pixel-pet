@@ -35,7 +35,7 @@ export class WorkspacePranks implements Pranks {
     const eat = doc.querySelector<HTMLElement>('.pixel-pet-panel-action[data-cmd="eat"]');
     if (eat && this.canEat()) {
       const r = eat.getBoundingClientRect();
-      const t = this.target('panel-eat', 'food', eat, r.left + Math.min(36, r.width / 2), r.top + r.height / 2, () => eat.click());
+      const t = this.target('panel-eat', 'food', eat, r.left + Math.min(36, r.width / 2), r.top + r.height / 2, () => { eat.click(); return 'Asked for food'; });
       if (t) out.push(t);
     }
     for (const side of ['left', 'right'] as Side[]) {
@@ -59,13 +59,14 @@ export class WorkspacePranks implements Pranks {
       const was = this.collapsed(side);
       el.click();
       // Put it back later, unless that was it putting it back.
-      if (this.owed?.side === side) this.owed = null;
-      else this.owed = { side, collapsed: was, due: Date.now() + OWED_AFTER[0] + Math.random() * (OWED_AFTER[1] - OWED_AFTER[0]) };
+      if (this.owed?.side === side) { this.owed = null; return `${was ? 'Reopened' : 'Closed'} the ${side} sidebar again`; }
+      this.owed = { side, collapsed: was, due: Date.now() + OWED_AFTER[0] + Math.random() * (OWED_AFTER[1] - OWED_AFTER[0]) };
+      return `${was ? 'Opened' : 'Closed'} the ${side} sidebar`;
     });
   }
 
   /** A target at (x, y) on `el`, if it's on screen and nothing is covering it there. */
-  private target(id: string, kind: PrankTarget['kind'], el: HTMLElement, x: number, y: number, press: () => void): PrankTarget | null {
+  private target(id: string, kind: PrankTarget['kind'], el: HTMLElement, x: number, y: number, press: () => string): PrankTarget | null {
     const there = () => {
       if (!el.isConnected) return false;
       const r = el.getBoundingClientRect();
@@ -76,8 +77,8 @@ export class WorkspacePranks implements Pranks {
     if (!there()) return null;
     return {
       id, kind, x, y, ok: there, press,
-      hover: (on) => el.toggleClass('pixel-pet-hover', on),
-      down: (on) => el.toggleClass('pixel-pet-down', on),
+      hover: (on) => el.toggleClass('pixel-pet-touched', on),
+      down: (on) => el.toggleClass('pixel-pet-pressed', on),
     };
   }
 }

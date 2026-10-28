@@ -203,6 +203,9 @@ export class Body {
   gulp = -1;
   /** A push-up display: how high the front legs are lifting the chest and head, art px. */
   pushup = 0;
+  /** Jumping straight up, all four feet off the ground: how high, art px. */
+  hop = 0;
+  private hopWas = 0;
   /**
    * Reaching out with a forefoot — the one nearer (x, y) — to press something there: `k`
    * how far it has gone over to it (0..1), `z` how high above it the hand is (art px).
@@ -343,7 +346,7 @@ export class Body {
   footZ(leg: Leg) {
     if (this.held) return this.z[leg.def.seg];
     const raised = leg === this.reacher && this.reach ? this.reach.z * this.reach.k : 0;
-    return this.ground(leg.foot.x, leg.foot.y) + leg.lift * 1.5 + raised;
+    return this.ground(leg.foot.x, leg.foot.y) + leg.lift * 1.5 + raised + this.hop * 0.85;
   }
 
   update(dt: number, drive: Drive) {
@@ -568,8 +571,11 @@ export class Body {
       for (let i = 1; i < SPINE; i++) zt[i] = Math.max(zt[i], zt[i - 1] - DRAPE_SLOPE);
       for (let i = SPINE - 2; i >= 0; i--) zt[i] = Math.max(zt[i], zt[i + 1] - DRAPE_SLOPE);
     }
+    // A hop (a start, say) lifts the whole of it straight off the ground at once, not eased.
+    const dh = this.hop - this.hopWas;
+    this.hopWas = this.hop;
     for (let i = 0; i < SPINE; i++) {
-      this.z[i] = approach(this.z[i], zt[i], 25, dt);
+      this.z[i] = approach(this.z[i], zt[i] + this.hop, 25, dt) + dh;
     }
   }
 

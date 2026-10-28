@@ -1,33 +1,45 @@
 import { ItemView, WorkspaceLeaf, setIcon } from 'obsidian';
+import { ACTIONS, Action, current } from './actions';
+import { Diary, DiaryEntry, ago } from './diary';
+import type { DiaryKind } from './engine/personality';
 import type { PetEngine } from './engine/engine';
+import { pixelIcon } from './pixels';
 
 export const PANEL_VIEW = 'pixel-pet-panel';
 
-/** The things you can ask the pet to do: command, label, icon. */
-const ACTIONS: [string, string, string][] = [
-  ['come', 'Come here', 'hand'],
-  ['sleep', 'Find a place to sleep', 'moon'],
-  ['wake', 'Wake up', 'alarm-clock'],
-  ['explore', 'Go exploring', 'compass'],
-  ['scout', 'Explore this note', 'file-search'],
-  ['eat', 'Have something to eat', 'bug'],
-  ['nibble', 'Steal a letter', 'type'],
-  ['bask', 'Bask', 'sun-medium'],
-  ['pushups', 'Do push-ups', 'dumbbell'],
-  ['play', 'Play with the graph', 'git-fork'],
-  ['prank', 'Cause mischief', 'sparkles'],
-];
+/** A pixel icon to go with what it's doing. */
+const STATE_ICONS: Record<string, string> = {
+  idle: 'paw', basking: 'sun', explore: 'look', scout: 'look', hunt: 'fly', feast: 'fly',
+  startle: 'bang', flee: 'bang', sleep: 'moon', nap: 'moon', nibble: 'letter', held: 'hand',
+  watch: 'paw', inspect: 'letter', lurk: 'paw', curious: 'paw', retreat: 'look', play: 'ball',
+  prank: 'flame', hide: 'paw', away: 'paw',
+};
+
+/** And one for each kind of diary entry. */
+const DIARY_ICONS: Record<DiaryKind, string> = {
+  catch: 'fly', letter: 'letter', nap: 'moon', sleep: 'moon', play: 'ball', prank: 'flame', snack: 'fly',
+  explore: 'look', retreat: 'look', petted: 'heart', held: 'hand', startle: 'bang', pushups: 'up', bask: 'sun',
+};
+
+type Button = { action: Action; el: HTMLButtonElement; icon: HTMLElement; label: HTMLElement; shown: string };
 
 /**
- * A side panel, like any other, for telling the pet what to do — and seeing what it's
- * up to. Optional: open it from the command palette when you want it.
+ * A side panel for keeping up with the pet: what it's doing now, a short diary of what
+ * it's been up to (scrolling, so it doesn't take over the sidebar), and the things you can
+ * ask it to do, two to a row. One that can't do anything just now is dimmed, and says
+ * why. Drawn in the pet's own pixel style.
  */
 export class PetPanel extends ItemView {
-  private status!: HTMLElement;
-  private note!: HTMLElement;
-  private noteTimer = 0;
+  private statusIcon!: HTMLElement;
+  private statusText!: HTMLElement;
+  private list!: HTMLElement;
+  private hintEl!: HTMLElement;
+  private buttons: Button[] = [];
+  private hintTimer = 0;
+  private lastIcon = '';
+  private drawn = '';
 
-  constructor(leaf: WorkspaceLeaf, private engine: () => PetEngine | null) {
+  constructor(leaf: WorkspaceLeaf, private engine: () => PetEngine | null, private diary: Diary, private openSettings: () => void) {
     super(leaf);
   }
 
@@ -39,40 +51,93 @@ export class PetPanel extends ItemView {
     const root = this.contentEl;
     root.empty();
     root.addClass('pixel-pet-panel');
-    const head = root.createDiv({ cls: 'pixel-pet-panel-status' });
-    head.createSpan({ cls: 'pixel-pet-panel-label', text: 'Now: ' });
-    this.status = head.createSpan({ text: '…' });
-    const list = root.createDiv({ cls: 'pixel-pet-panel-actions' });
-    for (const [cmd, label, icon] of ACTIONS) {
-      const button = list.createEl('button', { cls: 'pixel-pet-panel-action', attr: { 'data-cmd': cmd } });
-      setIcon(button.createSpan({ cls: 'pixel-pet-panel-icon' }), icon);
-      button.createSpan({ text: label });
-      button.addEventListener('click', () => this.run(cmd));
+
+    const status = root.createDiv({ cls: 'pixel-pet-box pixel-pet-status', attr: { 'aria-live': 'polite' } });
+    this.statusIcon = status.createSpan({ cls: 'pixel-pet-status-icon' });
+    this.statusText = status.createSpan({ cls: 'pixel-pet-status-text' });
+
+    const diary = root.createDiv({ cls: 'pixel-pet-box pixel-pet-diary' });
+    this.list = diary.createDiv({ cls: 'pixel-pet-diary-list' });
+
+    const grid = root.createDiv({ cls: 'pixel-pet-panel-grid' });
+    for (const action of ACTIONS) {
+      const el = grid.createEl('button', { cls: 'pixel-pet-panel-action', attr: { 'data-cmd': action.cmd, type: 'button' } });
+      const b: Button = { action, el, icon: el.createSpan({ cls: 'pixel-pet-panel-icon' }), label: el.createSpan({ cls: 'pixel-pet-panel-label' }), shown: '' };
+      el.addEventListener('click', () => this.run(b));
+      this.buttons.push(b);
     }
-    this.note = root.createDiv({ cls: 'pixel-pet-panel-note' });
-    this.registerInterval(window.setInterval(() => this.refresh(), 400));
+    this.hintEl = root.createDiv({ cls: 'pixel-pet-panel-hint' });
+
+
+    const footer = root.createDiv({ cls: 'pixel-pet-panel-footer' });
+    const settings = footer.createEl('button', { cls: 'clickable-icon pixel-pet-panel-settings', attr: { 'aria-label': 'Pixel Pet settings', type: 'button' } });
+    setIcon(settings.createSpan({ cls: 'pixel-pet-panel-settings-icon' }), 'settings');
+    settings.createSpan({ text: 'Settings' });
+    settings.addEventListener('click', () => this.openSettings());
+
+    this.register(this.diary.watch(() => this.drawDiary()));
+    this.registerInterval(window.setInterval(() => this.refresh(), 300));
+    this.registerInterval(window.setInterval(() => this.drawDiary(true), 30_000));
     this.refresh();
+    this.drawDiary();
   }
 
-  private run(cmd: string) {
+  private run(b: Button) {
     const engine = this.engine();
-    if (!engine) { this.say('The pet is hidden. Show it from the ribbon or the command palette.'); return; }
-    const said = engine.command(cmd);
-    this.say(said ?? '');
+    if (!engine) { this.hint('The pet is hidden. Show it from the ribbon or the command palette.'); return; }
+    const { cmd } = current(b.action, engine);
+    const why = engine.unavailable(cmd);
+    if (why) { this.hint(why); return; }
+    this.hint(engine.command(cmd) ?? '');
     this.refresh();
   }
 
-  private say(text: string) {
-    this.note.setText(text);
-    window.clearTimeout(this.noteTimer);
-    if (text) this.noteTimer = window.setTimeout(() => this.note.setText(''), 4000);
+  /** A few words under the buttons, for a few seconds. */
+  private hint(text: string) {
+    this.hintEl.setText(text);
+    this.hintEl.toggleClass('is-shown', !!text);
+    window.clearTimeout(this.hintTimer);
+    if (text) this.hintTimer = window.setTimeout(() => this.hint(''), 4000);
   }
 
   private refresh() {
-    this.status.setText(this.engine()?.activity ?? 'Hidden');
+    const engine = this.engine();
+    this.statusText.setText(engine ? engine.activity : 'Hidden');
+    const icon = STATE_ICONS[engine?.stateKey ?? 'away'] ?? 'paw';
+    if (icon !== this.lastIcon) { pixelIcon(this.statusIcon, icon); this.lastIcon = icon; }
+    for (const b of this.buttons) {
+      const f = current(b.action, engine);
+      if (b.shown !== f.cmd) { b.label.setText(f.label); pixelIcon(b.icon, f.pixel); b.shown = f.cmd; }
+      const why = engine ? engine.unavailable(f.cmd) : 'The pet is hidden';
+      b.el.toggleClass('is-unavailable', !!why);
+      b.el.setAttr('aria-disabled', why ? 'true' : 'false');
+      b.el.setAttr('aria-label', why ? `${f.label}: ${why}` : f.label);
+    }
+  }
+
+  /** The diary, newest first. (`times` only: just bring the "4 min ago"s up to date.) */
+  private drawDiary(times = false) {
+    const entries = this.diary.entries, key = entries.map((e) => `${e.at}:${e.times}`).join(',');
+    if (times && key === this.drawn) {
+      this.list.querySelectorAll<HTMLElement>('.pixel-pet-diary-when').forEach((el, i) => el.setText(ago(entries[i].at)));
+      return;
+    }
+    this.drawn = key;
+    this.list.empty();
+    if (!entries.length) { this.list.createDiv({ cls: 'pixel-pet-diary-empty', text: 'Nothing yet. Give it a minute.' }); return; }
+    for (const e of entries) this.entry(e);
+  }
+
+  private entry(e: DiaryEntry) {
+    const row = this.list.createDiv({ cls: 'pixel-pet-diary-entry' });
+    pixelIcon(row.createSpan({ cls: 'pixel-pet-diary-icon' }), DIARY_ICONS[e.kind], 12);
+    const what = row.createSpan({ cls: 'pixel-pet-diary-what', text: e.text });
+    if (e.note) { what.appendText(e.kind === 'explore' ? ' ' : ' in '); what.createEl('em', { text: e.note }); }
+    if (e.times > 1) what.createSpan({ cls: 'pixel-pet-diary-times', text: ` ×${e.times}` });
+    row.createSpan({ cls: 'pixel-pet-diary-when', text: ago(e.at) });
   }
 
   async onClose() {
-    window.clearTimeout(this.noteTimer);
+    window.clearTimeout(this.hintTimer);
   }
 }

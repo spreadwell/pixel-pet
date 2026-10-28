@@ -46,35 +46,150 @@ body.pixel-pet-holding * {
   z-index: calc(var(--layer-popover, 30) - 1);
 }
 
-/* The pet panel: what it's up to, and buttons to ask it to do things. */
-.pixel-pet-panel-status {
-  padding: var(--size-4-2) 0 var(--size-4-3);
-  color: var(--text-normal);
-}
-.pixel-pet-panel-label {
-  color: var(--text-muted);
-}
-.pixel-pet-panel-actions {
+/* The pet panel, in the pet's own pixel style: boxes with stepped, one-pixel-notched
+   corners (a 2px "pixel", drawn as four offset shadows), pixel icons, and buttons that
+   press down a pixel. What it's doing, a short scrolling diary, then its commands. */
+.pixel-pet-panel {
+  --pp-px: 2px;
+  --pp-edge: var(--background-modifier-border-hover);
+  --pp-fill: var(--background-secondary);
   display: flex;
   flex-direction: column;
-  gap: var(--size-4-1);
+  gap: var(--size-4-3);
+  padding: calc(var(--size-4-3) + var(--pp-px));
 }
-.pixel-pet-panel-action {
+.pixel-pet-box,
+.pixel-pet-panel button.pixel-pet-panel-action {
+  background-color: var(--pp-fill);
+  box-shadow:
+    var(--pp-px) 0 0 0 var(--pp-edge),
+    calc(-1 * var(--pp-px)) 0 0 0 var(--pp-edge),
+    0 var(--pp-px) 0 0 var(--pp-edge),
+    0 calc(-1 * var(--pp-px)) 0 0 var(--pp-edge);
+}
+.pixel-pet-status {
+  display: flex;
+  align-items: center;
+  gap: var(--size-4-2);
+  padding: var(--size-4-2) var(--size-4-3);
+  font-size: var(--font-ui-small);
+  font-weight: var(--font-semibold);
+}
+.pixel-pet-status-icon,
+.pixel-pet-panel-icon,
+.pixel-pet-diary-icon {
+  display: flex;
+  flex: none;
+}
+.pixel-pet-status-icon { color: var(--text-accent); }
+.pixel-pet-pixel-icon { fill: currentColor; }
+.pixel-pet-diary {
+  padding: var(--size-4-2) var(--size-4-1) var(--size-4-1) var(--size-4-3);
+}
+/* Short, and scrolls: about five entries showing. */
+.pixel-pet-diary-list {
+  max-height: 120px;
+  overflow-y: auto;
+  padding-right: var(--size-4-2);
+}
+.pixel-pet-diary-entry {
+  display: flex;
+  align-items: baseline;
+  gap: var(--size-4-2);
+  padding: 3px 0;
+  font-size: var(--font-ui-smaller);
+  line-height: 1.35;
+}
+.pixel-pet-diary-entry + .pixel-pet-diary-entry {
+  border-top: 1px dashed var(--background-modifier-border);
+}
+.pixel-pet-diary-icon {
+  align-self: center;
+  color: var(--text-faint);
+}
+.pixel-pet-diary-what {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-normal);
+}
+.pixel-pet-diary-what em { color: var(--text-muted); }
+.pixel-pet-diary-times { color: var(--text-faint); }
+.pixel-pet-diary-when {
+  flex: none;
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+.pixel-pet-diary-empty {
+  padding: 3px 0 var(--size-4-1);
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+}
+.pixel-pet-panel-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: calc(var(--size-4-2) + var(--pp-px));
+  padding: var(--pp-px);
+}
+/* An odd one out at the end takes the whole row. */
+.pixel-pet-panel-grid > button.pixel-pet-panel-action:last-child:nth-child(odd) {
+  grid-column: span 2;
+}
+.pixel-pet-panel button.pixel-pet-panel-action {
+  --pp-fill: var(--interactive-normal);
   display: flex;
   align-items: center;
   justify-content: flex-start;
   gap: var(--size-4-2);
-  width: 100%;
-}
-.pixel-pet-panel-icon {
-  display: flex;
-  color: var(--text-muted);
-}
-.pixel-pet-panel-note {
-  min-height: 2.5em;
-  padding-top: var(--size-4-3);
-  color: var(--text-muted);
+  min-width: 0;
+  height: auto;
+  min-height: 32px;
+  padding: var(--size-4-1) var(--size-4-2);
+  border: none;
+  border-radius: 0;
+  color: var(--text-normal);
   font-size: var(--font-ui-small);
+  text-align: left;
+  transition: transform 60ms steps(1), background-color 100ms steps(2);
+}
+.pixel-pet-panel-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pixel-pet-panel-icon { color: var(--text-muted); }
+.pixel-pet-panel button.pixel-pet-panel-action:hover,
+.pixel-pet-panel button.pixel-pet-panel-action.pixel-pet-touched {
+  --pp-fill: var(--interactive-hover);
+}
+/* Pressed, by you or by the pet: down a pixel. */
+.pixel-pet-panel button.pixel-pet-panel-action:active,
+.pixel-pet-panel button.pixel-pet-panel-action.pixel-pet-pressed {
+  transform: translateY(var(--pp-px));
+}
+/* Can't do anything just now: dimmed (and says why when pressed). */
+.pixel-pet-panel button.pixel-pet-panel-action.is-unavailable { opacity: 0.45; }
+.pixel-pet-panel-hint {
+  min-height: 1.4em;
+  margin-top: calc(-1 * var(--size-4-1));
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+.pixel-pet-panel-footer {
+  display: flex;
+  justify-content: flex-end;
+}
+.pixel-pet-panel-settings {
+  gap: var(--size-4-1);
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+}
+.clickable-icon.pixel-pet-touched {
+  background-color: var(--background-modifier-hover);
+  color: var(--icon-color-hover);
+}
+.clickable-icon.pixel-pet-pressed {
+  transform: scale(0.9);
+  transition: transform 70ms ease-out;
 }
 
 /* The Z's of a sleeping pet, on their own finer-grained layer just above it. */
@@ -115,25 +230,4 @@ body.pixel-pet-holding * {
 .pixel-pet-page-title {
   font-size: var(--font-ui-large);
   font-weight: var(--font-semibold);
-}
-
-/* A button the pet's hand is over shows hovered, and goes down as it presses it, as it
-   does for a pointer. (The panel's buttons go down for a pointer's click too.) */
-.pixel-pet-panel-action {
-  transition: transform 70ms ease-out, background-color 120ms ease;
-}
-.pixel-pet-panel-action.pixel-pet-hover {
-  background-color: var(--interactive-hover);
-}
-.pixel-pet-panel-action:active,
-.pixel-pet-panel-action.pixel-pet-down {
-  transform: translateY(1px) scale(0.97);
-}
-.clickable-icon.pixel-pet-hover {
-  background-color: var(--background-modifier-hover);
-  color: var(--icon-color-hover);
-}
-.clickable-icon.pixel-pet-down {
-  transform: scale(0.9);
-  transition: transform 70ms ease-out;
 }
