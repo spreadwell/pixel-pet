@@ -94,7 +94,6 @@ export class GeckoRenderer {
    */
   refined = false;
   private mask = new Uint8Array(0);
-  private solid = new Uint8Array(0);
   /** How the eyes are drawn: one pixel, a 2×2 block, a block with a glint, or bulging past the head. */
   eyeStyle: 'dot' | 'big' | 'glint' | 'bulge' = 'dot';
   private snapped = new Map<Leg, Snapped>();
@@ -146,7 +145,6 @@ export class GeckoRenderer {
       if (shadow[y * sw + x] && !(this.depth[y * bw + x] > 0)) ctx.fillRect(bx + x, by + y, 1, 1);
     }
 
-    if (this.refined) { this.cleanSilhouette(); this.paintOutline(ctx, legs, pal); }
     for (const p of legs) { ctx.fillStyle = p.c; ctx.fillRect(p.x, p.y, 1, 1); }
     this.paintBody(ctx, b, pal);
     this.paintHead(ctx, b, pal, project, res);
@@ -193,7 +191,7 @@ export class GeckoRenderer {
       const { x: cx, y: cy } = project(sp.x, sp.y, z);
       let r = b.width(i) * b.breathScale(i) * b.squeeze[i] * (1 + NEARER * Math.max(0, z)) * res;
       // A tail that never breaks up into dots at its thin end.
-      if (this.refined) r = Math.max(r, 0.6 * res);
+      if (this.refined) r = Math.max(r, 0.75 * res);
       disc(cx, cy, r, (x, y, dx, dy, d2) => {
         const lx = x - this.bx, ly = y - this.by;
         if (lx < 0 || ly < 0 || lx >= this.bw || ly >= this.bh) return;
@@ -228,9 +226,9 @@ export class GeckoRenderer {
     }
   }
 
-  /** The refined look: fill one-pixel notches and shave one-pixel bumps, into `mask`. */
-  private cleanSilhouette() {
-    const { bw, bh, depth, lat, seg } = this;
+  /** The refined look: clean silhouette and three-tone shading. */
+  private paintRefined(ctx: CanvasRenderingContext2D, pal: Palette) {
+    const { bw, bh, bx, by, depth, lat, seg } = this;
     const n = bw * bh;
     if (this.mask.length < n) this.mask = new Uint8Array(n);
     const m = this.mask;
@@ -247,48 +245,15 @@ export class GeckoRenderer {
         seg[k] = seg[src]; lat[k] = lat[src];
       } else m[k] = 0;
     }
-  }
-
-  /**
-   * The refined look: a one-pixel line round the body and legs together, so the animal
-   * reads as one clean shape against any page — darkest on the side away from the light,
-   * softer where the body beside it is lit.
-   */
-  private paintOutline(ctx: CanvasRenderingContext2D, legs: { x: number; y: number }[], pal: Palette) {
-    const { bw, bh, bx, by, mask: m } = this;
-    const n = bw * bh;
-    if (this.solid.length < n) this.solid = new Uint8Array(n);
-    const solid = this.solid;
-    // The thin end of the tail is left as a bare line, like a rat's tail, not boxed in.
-    for (let k = 0; k < n; k++) solid[k] = m[k] && this.seg[k] < TAIL_FIRST + 7 ? 1 : 0;
-    for (const p of legs) {
-      const x = p.x - bx, y = p.y - by;
-      if (x >= 0 && y >= 0 && x < bw && y < bh) solid[y * bw + x] = 1;
-    }
-    const is = (x: number, y: number) => x >= 0 && y >= 0 && x < bw && y < bh && solid[y * bw + x] === 1;
-    const lit = (x: number, y: number) => x >= 0 && y >= 0 && x < bw && y < bh && m[y * bw + x] > 0 && this.lat[y * bw + x] * this.light > 0.15;
-    for (let y = 0; y < bh; y++) for (let x = 0; x < bw; x++) {
-      if (solid[y * bw + x] || m[y * bw + x]) continue;
-      if (!(is(x - 1, y) || is(x + 1, y) || is(x, y - 1) || is(x, y + 1))) continue;
-      ctx.fillStyle = lit(x - 1, y) || lit(x + 1, y) || lit(x, y - 1) || lit(x, y + 1) ? pal.shade : pal.outline;
-      ctx.fillRect(bx + x, by + y, 1, 1);
-    }
-  }
-
-  /** The refined look: three tones and markings, inside the outline. */
-  private paintRefined(ctx: CanvasRenderingContext2D, pal: Palette) {
-    const { bw, bh, bx, by, lat, seg, mask: m } = this;
     const filled = (x: number, y: number) => x >= 0 && y >= 0 && x < bw && y < bh && m[y * bw + x] > 0;
     for (let y = 0; y < bh; y++) for (let x = 0; x < bw; x++) {
       const k = y * bw + x;
       if (!m[k]) continue;
-      const f = lat[k] * this.light, i = seg[k];
+      const f = lat[k] * this.light;
       const edge = !filled(x - 1, y) || !filled(x + 1, y) || !filled(x, y - 1) || !filled(x, y + 1);
-      // Shadow down the far side, a bold highlight band down the near side, mid tone between.
-      // The thin end of the tail is too narrow for three tones: mid tone and rings only.
-      const thin = i >= TAIL_FIRST + 4;
-      const tone = f < -0.35 || (edge && f < 0) ? pal.shade : f > 0.15 && !thin ? pal.light : pal.base;
-      ctx.fillStyle = tone;
+      // Shadow is the far side's edge and the mass of the underside; the near side
+      // carries a highlight band inside its edge; the rest is mid tone.
+      ctx.fillStyle = f < -0.55 || (edge && f < -0.1) ? pal.shade : f > 0.25 && !edge ? pal.light : pal.base;
       ctx.fillRect(bx + x, by + y, 1, 1);
     }
   }
@@ -313,8 +278,7 @@ export class GeckoRenderer {
       return ix >= 0 && iy >= 0 && ix < this.bw && iy < this.bh && this.depth[iy * this.bw + ix] > 0;
     };
     const eyeAt = (k: number, side: number) => {
-      // Inside the outline the eye sits a pixel in from the edge, so it doesn't merge with it.
-      let off = b.width(k) - (this.refined ? 1.1 : 0.5), e = at(k, side * off);
+      let off = b.width(k) - 0.5, e = at(k, side * off);
       while (!onHead(e) && off > 0.3) { off -= 0.35; e = at(k, side * off); }
       return e;
     };
