@@ -195,6 +195,8 @@ export class Body {
   wiggle = 0;
   /** Where along the spine a swallowed mouthful is, or -1. */
   gulp = -1;
+  /** A push-up display: how high the front legs are lifting the chest and head, art px. */
+  pushup = 0;
   private twitch = 0;
   private flexAmp = 0;
   /** Path-following spine (without flexion); `pts` is what is drawn. */
@@ -489,6 +491,8 @@ export class Body {
     for (let i = 0; i < SPINE; i++) {
       zt[i] = this.ground(this.pts[i].x, this.pts[i].y);
       if (i < SHOULDER + 3) zt[i] += this.rear * (1 - i / (SHOULDER + 3));
+      // Push-up: the front legs straighten, raising the chest and head; the hips stay down.
+      if (i < SHOULDER + 5) zt[i] += this.pushup * Math.min(1, (SHOULDER + 5 - i) / 6);
     }
     for (let pass = 0; pass < 2; pass++) {
       for (let i = 1; i < SPINE; i++) zt[i] = Math.max(zt[i], zt[i - 1] - DRAPE_SLOPE);
@@ -604,6 +608,11 @@ export class Body {
       }
 
       leg.knee = this.solveKnee(leg, hip);
+      // In a push-up the front legs straighten: the elbow comes into line with shoulder and foot.
+      if (leg.def.front && this.pushup > 0) {
+        const k = Math.min(1, this.pushup / 2);
+        leg.knee = { x: lerp(leg.knee.x, (hip.x + leg.foot.x) / 2, k), y: lerp(leg.knee.y, (hip.y + leg.foot.y) / 2, k) };
+      }
     }
   }
 

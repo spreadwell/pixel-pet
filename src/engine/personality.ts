@@ -1,7 +1,7 @@
 import { Body, Drive, NEARER, TAIL_FIRST } from './body';
 import type { Bug, Particles, Swarm } from './bugs';
 import type { InputTracker } from './input';
-import { angleDiff, clamp, lerp, rand } from './math';
+import { angleDiff, clamp, lerp, rand, smoothstep } from './math';
 import type { NibbleTarget, Nibbler } from './nibble';
 import type { Palette } from './palette';
 import type { Reactions } from './reactions';
@@ -240,9 +240,12 @@ const StateHandlers: Record<State, Handler> = {
         nextTongueTime: 40 + Math.random() * 80,
         nextBlinkTime: 30 + Math.random() * 60,
       };
+      // Now and then, a push-up display while it stands there.
+      if (Math.random() < 0.3) g.schedulePushups(10 + Math.random() * 30);
     },
     update(g) {
       const t = g.stateTimer, d = g.stateData;
+      if (g.pushups()) return { targetSpeed: 0 };
       if (t > d.nextLookTime) { g.headLook.look(); d.nextLookTime = t + 30 + Math.random() * 50; }
       if (t > d.nextTongueTime) { g.flick(); d.nextTongueTime = t + 50 + Math.random() * 100; }
       if (t > d.nextBlinkTime) { g.blink(); d.nextBlinkTime = t + 30 + Math.random() * 60; }
@@ -268,9 +271,11 @@ const StateHandlers: Record<State, Handler> = {
       const baseDur = g.traits.resolve('baskDuration');
       const fullBonus = nearHome && g.needs.hunger > 70 ? g.needs.fullness * baseDur * 1.5 : 0;
       g.stateData = { duration: baseDur + Math.random() * baseDur * 1.5 + fullBonus, nextLookTime: 60 + Math.random() * 80, nextBlinkTime: 40 + Math.random() * 50 };
+      if (Math.random() < 0.45) g.schedulePushups(40 + Math.random() * Math.max(0, g.stateData.duration - 120));
     },
     update(g) {
       const t = g.stateTimer, d = g.stateData;
+      if (g.pushups()) return { targetSpeed: 0 };
       if (g.petted) d.duration = Math.max(d.duration, t + 60);
       if (t > d.nextLookTime && !g.petted) { g.headLook.look(); d.nextLookTime = t + 80 + Math.random() * 100; }
       if (t > d.nextBlinkTime) { g.blink(); d.nextBlinkTime = t + 40 + Math.random() * 60; }
@@ -901,6 +906,36 @@ export class Personality {
   /** The panel it is heading under or hiding beneath. */
   cover: CoverEntry | null = null;
   hideFast = false;
+  /** A push-up display under way or to come: when it starts (state ticks), how many bobs. */
+  display: { at: number; bobs: number } | null = null;
+
+  /** Plan a push-up display `inTicks` from now in this state: two to four bobs. */
+  schedulePushups(inTicks: number) {
+    this.display = { at: this.stateTimer + inTicks, bobs: 2 + Math.floor(Math.random() * 3) };
+  }
+
+  /**
+   * Run the push-up display, if one is due: the front legs straighten to lift the chest and
+   * head, hold a beat, and drop, a few times in quick succession, head facing ahead.
+   * True while it is displaying (and the state should hold still and not time out).
+   */
+  pushups(): boolean {
+    const d = this.display, b = this.body;
+    if (!d || this.stateTimer < d.at) { b.pushup = 0; return false; }
+    const BOB = 20, t = this.stateTimer - d.at;
+    if (t >= BOB * d.bobs) {
+      this.display = null;
+      b.pushup = 0;
+      this.stateData.duration = Math.max(this.stateData.duration ?? 0, this.stateTimer + 20);
+      return false;
+    }
+    const u = (t % BOB) / BOB, first = t < BOB ? 1.15 : 1;
+    const lift = u < 0.35 ? smoothstep(u / 0.35) : u < 0.55 ? 1 : 1 - smoothstep((u - 0.55) / 0.45);
+    b.pushup = 3.4 * first * lift;
+    this.headLook.lookAt(0);
+    return true;
+  }
+
   /** Has a stolen letter in its mouth. */
   carrying = false;
   /** What it last caught. */
@@ -978,6 +1013,7 @@ export class Personality {
   enterState(state: State) {
     // Interrupted with a stolen letter in its mouth: it drops it.
     if (this.carrying && state !== STATE.NIBBLE) { this.c.reactions.finish(false); this.carrying = false; }
+    this.display = null;
     // Coming to rest under a panel (after a dash, say) is hiding: it will peek out.
     if ((state === STATE.IDLE || state === STATE.BASKING) && this.body.under && this.c.world.coverAt(this.head.x, this.head.y) && this.findCover(200)) {
       state = STATE.HIDE;
@@ -1529,6 +1565,7 @@ export class Personality {
     else if (this.state !== STATE.NIBBLE && this.state !== STATE.HUNT && this.state !== STATE.FEAST) b.mouthTarget = 0;
     if (this.state !== STATE.HUNT) b.wiggle = 0;
     if (this.state !== STATE.FEAST) b.gulp = -1;
+    if (this.state !== STATE.IDLE && this.state !== STATE.BASKING) { this.display = null; b.pushup = 0; }
 
     const slow = clamp(1 - this.currentSpeed / (this.speed || 1), 0, 1);
     return {
