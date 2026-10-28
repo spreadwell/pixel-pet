@@ -67,8 +67,17 @@ export class Bug {
   private beginHop(dir: number, dist: number) {
     this.state = 'hopping';
     this.heading = dir;
-    this.hop = { x0: this.x, y0: this.y, x1: this.x + Math.cos(dir) * dist, y1: this.y + Math.sin(dir) * dist, t: 0, dur: 0.22 + dist * 0.006 };
+    let x1 = this.x + Math.cos(dir) * dist, y1 = this.y + Math.sin(dir) * dist;
+    // Never out of the window, unless it's going for good.
+    const b = this.bounds;
+    if (b && !this.leaving) { x1 = clamp(x1, b.x + 4, b.x + b.w - 4); y1 = clamp(y1, b.y + 4, b.y + b.h - 4); }
+    this.hop = { x0: this.x, y0: this.y, x1, y1, t: 0, dur: 0.22 + Math.hypot(x1 - this.x, y1 - this.y) * 0.006 };
   }
+
+  /** Gone for good: off out of the window, and not worth hunting any more. */
+  leaving = false;
+  /** The window, as of the last update (art px). */
+  private bounds: { x: number; y: number; w: number; h: number } | null = null;
 
   /** Set by the swarm each frame: how close the nearest predator is. */
   threat = Infinity;
@@ -80,7 +89,9 @@ export class Bug {
     // Crickets freeze when something is stalking them close by.
     this.timer -= this.kind === 'cricket' && this.threat < 45 && this.state === 'resting' ? dt * 0.25 : dt;
     const b = world.bounds;
-    if (this.age > this.life && this.state !== 'leaving') {
+    this.bounds = b;
+    if (this.age > this.life && !this.leaving) {
+      this.leaving = true;
       this.state = 'leaving';
       const cx = this.x < b.w / 2 ? -30 : b.w + 30;
       this.aim = { x: cx, y: this.y + rand(-60, 60) };
@@ -91,6 +102,9 @@ export class Bug {
     else this.updateCricket(dt, world);
 
     if (this.x < -40 || this.y < -40 || this.x > b.w + 40 || this.y > b.h + 40) this.alive = false;
+    // Somehow still outside the window a while after turning up (a window that shrank,
+    // say): out of reach, so gone, rather than something the gecko hunts and can't catch.
+    else if (!this.leaving && this.age > 8 && !world.inBounds(this.x, this.y, -2)) this.alive = false;
   }
 
   private updateFly(dt: number, world: World) {
@@ -108,11 +122,11 @@ export class Bug {
     const toAim = Math.atan2(this.aim.y - this.y, this.aim.x - this.x);
     const wobble = noise1(this.age * 2.3, this.seed) * 2.4;
     this.heading += angleDiff(this.heading, toAim + wobble) * clamp(dt * 3.2, 0, 1);
-    const cruise = this.state === 'leaving' ? 70 : 42 + noise1(this.age * 1.1, this.seed + 3) * 14;
+    const cruise = this.leaving ? 70 : 42 + noise1(this.age * 1.1, this.seed + 3) * 14;
     this.speed += (cruise - this.speed) * clamp(dt * 2, 0, 1);
     this.x += Math.cos(this.heading) * this.speed * dt;
     this.y += Math.sin(this.heading) * this.speed * dt;
-    const targetZ = this.timer < 0.6 && this.state !== 'leaving' ? 0 : 7 + noise1(this.age * 3, this.seed + 9) * 2;
+    const targetZ = this.timer < 0.6 && !this.leaving ? 0 : 7 + noise1(this.age * 3, this.seed + 9) * 2;
     this.z += (targetZ - this.z) * clamp(dt * 4, 0, 1);
 
     if (this.state === 'flying') {
@@ -125,7 +139,7 @@ export class Bug {
         if (this.y < b.y + 4 || this.y > b.y + b.h - 4) this.heading = -this.heading;
         const q = world.clampToBounds(this.x, this.y, 3); this.x = q.x; this.y = q.y;
       } else this.heading = Math.atan2(this.aim.y - this.y, this.aim.x - this.x);
-      if (this.timer <= 0 && this.z < 0.8) {
+      if (this.timer <= 0 && this.z < 0.8 && this.inside) {
         this.state = 'landed';
         this.timer = rand(1.5, 5.5);
         this.speed = 0;
@@ -143,7 +157,7 @@ export class Bug {
       if (h.t >= 1) {
         this.z = 0;
         if (this.state === 'hopping') {
-          this.state = this.age > this.life ? 'leaving' : 'resting';
+          this.state = this.leaving ? 'leaving' : 'resting';
           this.timer = rand(1.5, 5);
         }
       }
@@ -248,7 +262,7 @@ export class Swarm {
   nearest(x: number, y: number, maxDist: number): Bug | null {
     let best: Bug | null = null, bd = maxDist;
     for (const b of this.bugs) {
-      if (!b.alive || b.state === 'leaving') continue;
+      if (!b.alive || b.leaving) continue;
       const d = Math.hypot(b.x - x, b.y - y);
       if (d < bd) { bd = d; best = b; }
     }

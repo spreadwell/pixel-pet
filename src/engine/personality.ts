@@ -2072,7 +2072,7 @@ export class Personality {
     return best;
   }
 
-  preyAlive(b: Bug) { return b.alive && b.state !== 'leaving'; }
+  preyAlive(b: Bug) { return b.alive && !b.leaving; }
 
   dropLetter() { this.letter = null; this.letterAt = null; }
 
