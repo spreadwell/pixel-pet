@@ -9,6 +9,7 @@ import { BrainOptions, Ctx, Personality, Playground, STATE } from './personality
 import { Reactions } from './reactions';
 import { GeckoRenderer } from './render';
 import { Zzz } from './zzz';
+import { LEDGE, NAP_W, napTone, paintNap } from './napsprite';
 import { Footprints, Happenings, HoverSim } from './surroundings';
 import { World } from './world';
 
@@ -418,12 +419,26 @@ export class PetEngine {
       for (const c of covers) g.rect(Math.round(c.x * res), Math.round(c.y * res), Math.round(c.w * res), Math.round(c.h * res));
       g.clip('evenodd');
     }
-    const ledge = this.brain.napLedge;
-    this.renderer.perch = ledge !== null ? { ledge, amount: this.body.curl } : null;
-    this.renderer.draw(g, this.body, pal, res);
+    // Napping on a block it's drawn from the side; hopping up or down, lifted.
+    const nap = this.brain.napView;
+    let zFrom: { x: number; y: number } | null = null;
+    if (nap?.side) {
+      const x0 = Math.round(nap.face > 0 ? nap.x : nap.x - NAP_W), y0 = Math.round(nap.ledge - nap.rise) - LEDGE;
+      const col = (x: number) => (nap.face > 0 ? x0 + x : x0 + NAP_W - 1 - x);
+      // A soft shadow along the edge it lies on.
+      g.fillStyle = pal.shadow;
+      for (let x = 4; x < NAP_W - 2; x++) g.fillRect(Math.round(col(x) * res), Math.round(nap.ledge * res), Math.ceil(res), Math.ceil(res));
+      paintNap((x, y, tone) => { g.fillStyle = napTone(pal, tone); g.fillRect(Math.round(col(x) * res), Math.round((y0 + y) * res), Math.ceil(res), Math.ceil(res)); }, nap.pose);
+      zFrom = { x: col(NAP_W - 4), y: y0 + 2 };
+    } else {
+      if (nap) g.translate(0, Math.round(-nap.rise * res));
+      this.renderer.draw(g, this.body, pal, res);
+      if (nap) g.translate(0, Math.round(nap.rise * res));
+      const h = this.body.pts[0];
+      if (this.brain.dozing) zFrom = this.body.project(h.x, h.y, this.body.z[0]);
+    }
     // Fast asleep: Z's.
-    const h = this.body.pts[0];
-    this.zzz.draw(g, pal, this.brain.dozing ? this.body.project(h.x, h.y, this.body.z[0]) : null, performance.now(), res);
+    this.zzz.draw(g, pal, this.brain.dozing ? zFrom : null, performance.now(), res);
     if (this.brain.carrying) {
       const s = this.brain.snout(), px = this.opts.px;
       this.reactions.hold((s.x + 0.5) * px, (s.y + 0.5) * px, this.body.headAngle);
