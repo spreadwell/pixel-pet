@@ -366,9 +366,7 @@ export class GeckoRenderer {
       const lit = l + SHADE_EDGE > 0, d = bend[seg[k]];
       // Side-on, the line of the back catches the light.
       const rim = this.tiltA > 0.6 && lit && (y === 0 || depth[k - bw] <= 0);
-      // ...and the pale throat and belly show along the bottom, from the chin to the hips.
-      const belly = this.tiltA > 0.6 && this.up[k] < -0.25 && seg[k] >= 1 && seg[k] <= HIP;
-      ctx.fillStyle = belly ? pal.belly : lit ? (d > 0.5 || rim ? pal.crest : pal.base) : d < -0.5 ? pal.crease : pal.shade;
+      ctx.fillStyle = lit ? (d > 0.5 || rim ? pal.crest : pal.base) : d < -0.5 ? pal.crease : pal.shade;
       ctx.fillRect(bx + x, by + y, 1, 1);
     }
   }
