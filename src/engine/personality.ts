@@ -323,6 +323,8 @@ const StateHandlers: Record<State, Handler> = {
         // Something just popped up: hurry, no dawdling.
         if (sd.forLure && g.lure) targetSpeed = g.speed * 1.5;
 
+        // Hurrying back into view after being scrolled off the page.
+        if (sd.hurry) targetSpeed = g.speed * 1.6;
         if (d < 15 * S) {
           // Came over to see what popped up: if it's still there, pounce on it.
           if (sd.forLure && g.lure) return { targetSpeed, transition: STATE.HUNT };
@@ -1181,6 +1183,13 @@ export class Personality {
     this.lureTicks = at ? 60 : 0;
     this.lureThere = null;
     if (at && this.calm && this.distTo(at.x, at.y) < 120) { this.targetBug = null; this.enterState(STATE.HUNT); }
+  }
+
+  /** Scrolled out of view off the edge of the page: hurry back in to here (art px). */
+  comeBackTo(at: { x: number; y: number }) {
+    if (this.state === STATE.HELD || this.state === STATE.SLEEP) return;
+    this.summon(at);
+    this.stateData.hurry = true;
   }
 
   /** A different note is open: everything around it has changed. Have a look round. */

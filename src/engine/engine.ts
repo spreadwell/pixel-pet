@@ -162,26 +162,66 @@ export class PetEngine {
 
   /**
    * Something scrolled. If the gecko is on it — the note, the file list — it rides along
-   * with the page, as do its footprints; pushed right to the edge, it scrambles.
+   * with the page, as do its footprints and any bugs on the page. Carried past the edge
+   * it goes out of view, clipped like the page's own content (never more than a body
+   * length past it), and once the scrolling stops it hurries back in.
    */
   private scrolled(box: DOMRect, dx: number, dy: number) {
     const b = this.body, px = this.opts.px;
     const inside = (x: number, y: number) => x * px > box.left && x * px < box.right && y * px > box.top && y * px < box.bottom;
     const ax = -dx / px, ay = -dy / px;
-    // Bugs on the page ride along too; flies in the air don't.
-    for (const bug of this.swarm.bugs) if (bug.onPage && inside(bug.x, bug.y)) bug.shift(ax, ay);
+    // Bugs on the page ride along too (scrolled off it, they are gone); flies in the air don't.
+    for (const bug of this.swarm.bugs) {
+      if (!bug.onPage || !inside(bug.x, bug.y)) continue;
+      bug.shift(ax, ay);
+      if (!inside(bug.x, bug.y)) bug.alive = false;
+    }
     if (!b || b.isHeld || b.under) return;
-    if (!inside(b.neck.x, b.neck.y)) return;
+    const same = (r: DOMRect | null) => !!r && Math.abs(r.left - box.left) < 2 && Math.abs(r.top - box.top) < 2 && Math.abs(r.width - box.width) < 2;
+    if (!inside(b.neck.x, b.neck.y) && !same(this.offPage)) return;
     b.translate(ax, ay);
     this.brain.shifted(ax, ay);
     this.prints.shift(ax, ay, inside);
     // The layout under it moved: look again soon.
     this.scanIn = Math.min(this.scanIn, 0.08);
-    const n = b.neck, m = 6;
-    const cx = Math.min(Math.max(n.x, box.left / px + m), box.right / px - m), cy = Math.min(Math.max(n.y, box.top / px + m), box.bottom / px - m);
-    if (cx !== n.x || cy !== n.y) {
-      b.translate(cx - n.x, cy - n.y);
-      this.brain.scare(n.x - ax, n.y - ay, true);
+    this.lastScroll = performance.now();
+    const n = b.neck;
+    if (!inside(n.x, n.y)) {
+      // Out of view past the edge, but no further than it takes to hide.
+      const out = 40;
+      const cx = Math.min(Math.max(n.x, box.left / px - out), box.right / px + out), cy = Math.min(Math.max(n.y, box.top / px - out), box.bottom / px + out);
+      if (cx !== n.x || cy !== n.y) b.translate(cx - n.x, cy - n.y);
+      this.offPage = box;
+      this.returning = false;
+    }
+  }
+
+  /** Off the edge of a scrolled page: the page's box (CSS px) it is clipped to, until it is back. */
+  private offPage: DOMRect | null = null;
+  private returning = false;
+  private returnedAt = 0;
+  private lastScroll = 0;
+
+  /** After a scroll carried it out of view: once the scrolling stops, come back in. */
+  private comeBack() {
+    const box = this.offPage, b = this.body, px = this.opts.px;
+    if (!box) return;
+    if (b.isHeld) { this.offPage = null; return; }
+    const m = 2;
+    const all = b.pts.every((p) => p.x * px > box.left + m && p.x * px < box.right - m && p.y * px > box.top + m && p.y * px < box.bottom - m);
+    if (all) { this.offPage = null; this.returning = false; return; }
+    const now = performance.now();
+    // Something else caught its attention on the way back: send it again.
+    if (this.returning && now - this.returnedAt > 2500) this.returning = false;
+    if (!this.returning && now - this.lastScroll > 250) {
+      this.returning = true;
+      this.returnedAt = now;
+      // Far enough in that the whole animal, tail and all, is back on the page.
+      const n = b.neck, inset = 44;
+      this.brain.comeBackTo({
+        x: Math.min(Math.max(n.x, box.left / px + inset), box.right / px - inset),
+        y: Math.min(Math.max(n.y, box.top / px + inset), box.bottom / px - inset),
+      });
     }
   }
 
@@ -307,7 +347,8 @@ export class PetEngine {
     // Once it is all the way out from under a panel, it is back on top of things.
     if (this.body.under && this.brain.state !== STATE.HIDE && !this.body.pts.some((p) => this.world.coverAt(p.x, p.y))) this.body.under = false;
 
-    if (!this.brain.entering) {
+    this.comeBack();
+    if (!this.brain.entering && !this.offPage) {
       const n = this.body.neck;
       const k = this.world.clampToBounds(n.x, n.y, 3);
       n.x = k.x; n.y = k.y;
@@ -340,6 +381,14 @@ export class PetEngine {
     for (const b of this.swarm.bugs) if (b.z < 1) b.draw(g, pal, this.frame, res);
     // Side panels lie over the note: whatever part of the gecko has crept under one is hidden.
     const covers = this.body.under ? this.world.covers : [];
+    // Scrolled off the edge of the page: only what is still on it shows.
+    const page = this.offPage;
+    if (page) {
+      g.save();
+      g.beginPath();
+      g.rect(Math.round((page.left / this.opts.px) * res), Math.round((page.top / this.opts.px) * res), Math.round((page.width / this.opts.px) * res), Math.round((page.height / this.opts.px) * res));
+      g.clip();
+    }
     if (covers.length) {
       g.save();
       g.beginPath();
@@ -354,6 +403,7 @@ export class PetEngine {
     }
     this.reactions.draw(this.nibbler.ghosts(performance.now()));
     if (covers.length) g.restore();
+    if (page) g.restore();
     for (const b of this.swarm.bugs) if (b.z >= 1) b.draw(g, pal, this.frame, res);
     this.particles.draw(g, res);
 
