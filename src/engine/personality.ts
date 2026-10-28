@@ -912,7 +912,8 @@ const StateHandlers: Record<State, Handler> = {
       const r = g.napRock!, h = g.head;
       // Lying in from the nearer end, facing along the block, hips at that end so the tail
       // goes over it.
-      const face = h.x < r.x + r.w / 2 ? 1 : -1, x = face > 0 ? r.x + 20 : r.x + r.w - 20, y = r.y - 3;
+      // Right at the edge, so turning the view to side-on and back doesn't slide it up or down.
+      const face = h.x < r.x + r.w / 2 ? 1 : -1, x = face > 0 ? r.x + 20 : r.x + r.w - 20, y = r.y - 1;
       g.stateData = { phase: 'go', face, spot: { x: x - face * 14, y }, end: { x, y }, corner: face > 0 ? r.x : r.x + r.w, ledge: r.y, tilt: 0, stand: 1, droop: 0, front: 0, hind: 0, lids: 0, sleepFor: 600 + Math.random() * 900, t: 0 };
       g.planRoute(x - face * 14, y);
     },
@@ -961,8 +962,10 @@ const StateHandlers: Record<State, Handler> = {
           if (sd.t === 24) g.headLook.look();
           sd.front = 1 - ease(30, 8);
           sd.hind = 1 - ease(36, 8);
-          sd.stand = ease(40, 12);
-          sd.droop = 1 - ease(50, 14);
+          // Up front first — it pushes its chest up on its arms — then the hips follow.
+          b.pushup = 1.8 * (ease(36, 8) - ease(48, 10));
+          sd.stand = ease(42, 12);
+          sd.droop = 1 - ease(46, 14);
           sd.tilt = 1 - ease(54, 22);
           b.dangle = { front: sd.front, hind: sd.hind };
           if (sd.t >= 76) {
@@ -972,8 +975,8 @@ const StateHandlers: Record<State, Handler> = {
             g.summon(w);
             return { targetSpeed: g.speed * 0.5 };
           }
-          // Moving off as it comes out of it.
-          if (sd.t >= 52) { g.targetAngle = sd.face > 0 ? 0 : Math.PI; return { targetSpeed: g.speed * 0.5 * ease(52, 16) }; }
+          // Moving off as soon as it's up, and coming out of it on the move.
+          if (sd.t >= 46) { g.targetAngle = sd.face > 0 ? 0 : Math.PI; return { targetSpeed: g.speed * 0.6 * ease(46, 14) }; }
           return { targetSpeed: 0 };
         }
       }
@@ -1916,7 +1919,7 @@ export class Personality {
     else if (this.state !== STATE.NIBBLE && this.state !== STATE.HUNT && this.state !== STATE.FEAST && this.state !== STATE.PLAY) b.mouthTarget = 0;
     if (this.state !== STATE.HUNT && this.state !== STATE.PLAY) b.wiggle = 0;
     if (this.state !== STATE.FEAST) b.gulp = -1;
-    if (this.state !== STATE.IDLE && this.state !== STATE.BASKING) { this.display = null; b.pushup = 0; }
+    if (this.state !== STATE.IDLE && this.state !== STATE.BASKING) { this.display = null; if (this.state !== STATE.NAP) b.pushup = 0; }
 
     const slow = clamp(1 - this.currentSpeed / (this.speed || 1), 0, 1);
     return {
