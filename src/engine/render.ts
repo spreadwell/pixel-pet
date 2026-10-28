@@ -27,7 +27,7 @@ import { clamp, lerp } from './math';
  *     more light; in the dip below one its shaded side goes a little deeper.
  */
 
-interface LegPixel { x: number; y: number; c: string; lift: number; z: number; near: boolean; }
+interface LegPixel { x: number; y: number; c: string; lift: number; z: number; near: boolean; /** Brush size, canvas px. */ w: number; }
 /** A leg's joints last drawn, in whole pixels: hip, knee, foot. */
 type Snapped = [number, number, number, number, number, number];
 /** Art px in (and, for the tilted view, how high above the ground the point is), canvas px out. */
@@ -129,8 +129,13 @@ export class GeckoRenderer {
   private up = new Float32Array(0);
   private tiltA = 0;
   private tiltCos = 1;
-  /** Canvas pixels per art pixel, rounded: the brush for legs, eyes and the face. */
+  /**
+   * Brushes for the fine features, canvas px: limbs and eyes at an art pixel (rounded),
+   * claws and the lines of the face a touch finer (rounded down), so that at in-between
+   * resolutions the limbs keep their weight and taper to delicate feet.
+   */
   private brush = 1;
+  private fine = 1;
   private tiltSin = 0;
   /** Carve the neck narrower than the head and shoulders, whichever way it faces. */
   pinchNeck = true;
@@ -150,6 +155,7 @@ export class GeckoRenderer {
     const phi = this.tiltA * TILT, cos = Math.cos(phi), sin = Math.sin(phi);
     this.tiltCos = cos; this.tiltSin = sin;
     this.brush = Math.max(1, Math.round(res));
+    this.fine = Math.max(1, Math.floor(res));
     const a0 = b.pts[2], a1 = b.pts[HIP], axisX = b.pts[12].x;
     const axis = tilt ? clamp((a1.y - a0.y) / (a1.x - a0.x || 1), -0.5, 0.5) : 0;
     const project: Project = (x, y, z, h = 0) => {
@@ -211,10 +217,9 @@ export class GeckoRenderer {
     const sideOn = this.tiltA > 0.6;
     // Fine features are drawn with a brush the size of an art pixel, so at a finer
     // resolution a leg stays as thick, relative to the body, as it is at 1×.
-    const B = this.brush;
-    for (const p of legs) if (!sideOn || !p.near) { if (sideOn) continue; ctx.fillStyle = p.c; ctx.fillRect(p.x, p.y, B, B); }
+    for (const p of legs) if (!sideOn || !p.near) { if (sideOn) continue; ctx.fillStyle = p.c; ctx.fillRect(p.x, p.y, p.w, p.w); }
     this.paintBody(ctx, b, pal);
-    if (sideOn) for (const p of legs) if (p.near) { ctx.fillStyle = pal.crease; ctx.fillRect(p.x, p.y, B, B); }
+    if (sideOn) for (const p of legs) if (p.near) { ctx.fillStyle = pal.crease; ctx.fillRect(p.x, p.y, p.w, p.w); }
     this.paintHead(ctx, b, pal, project, res);
   }
 
@@ -377,7 +382,7 @@ export class GeckoRenderer {
       const q = project(p.x + lx * side, p.y + ly * side, b.z[k], b.width(k) * FLAT_HEAD * 1.5);
       return { x: Math.floor(q.x), y: Math.floor(q.y) };
     };
-    const px = (p: { x: number; y: number }, c: string) => { ctx.fillStyle = c; ctx.fillRect(p.x, p.y, this.brush, this.brush); };
+    const px = (p: { x: number; y: number }, c: string, w = this.fine) => { ctx.fillStyle = c; ctx.fillRect(p.x, p.y, w, w); };
     const s0 = (1 + NEARER * Math.max(0, b.z[0])) * res;
 
     // One dark pixel per eye, on the sides of the skull; closed, it reads as shade. Each is
@@ -424,12 +429,13 @@ export class GeckoRenderer {
       if (sideOn) {
         // Side-on: a dash of an eye along the head; shut, its front end droops — sleepy.
         const s = Math.sign(fx) || 1;
-        px({ x: e.x - s, y: e.y }, pal.eye);
-        px(e, pal.eye);
-        if (closed) px({ x: e.x + s, y: e.y + 1 }, pal.eye);
+        const w = this.brush;
+        px({ x: e.x - s * w, y: e.y }, pal.eye, w);
+        px(e, pal.eye, w);
+        if (closed) px({ x: e.x + s * w, y: e.y + w }, pal.eye, this.fine);
         continue;
       }
-      if (this.eyeStyle === 'dot') { px(e, col); continue; }
+      if (this.eyeStyle === 'dot') { px(e, col, this.brush); continue; }
       if (this.eyeStyle === 'bulge') {
         // On the edge of the skull, and a pixel standing proud of it.
         px(e, col);
@@ -506,14 +512,14 @@ export class GeckoRenderer {
       snaps.set(leg, s);
       hip = { x: s[0] + 0.5, y: s[1] + 0.5 }; knee = { x: s[2] + 0.5, y: s[3] + 0.5 }; foot = { x: s[4] + 0.5, y: s[5] + 0.5 };
     }
-    const put = (x: number, y: number, l: number, z: number) => {
+    const put = (x: number, y: number, l: number, z: number, w: number) => {
       const ix = Math.floor(x), iy = Math.floor(y);
       const key = iy * 100003 + ix;
       if (seen.has(key)) return;
       seen.add(key);
-      out.push({ x: ix, y: iy, c, lift: l, z, near });
+      out.push({ x: ix, y: iy, c, lift: l, z, near, w });
     };
-    const line = (ax: number, ay: number, cx: number, cy: number, l0: number, l1: number, z0: number, z1: number) => {
+    const line = (ax: number, ay: number, cx: number, cy: number, l0: number, l1: number, z0: number, z1: number, w = this.brush) => {
       if (this.stableLegs) {
         // A clean one-pixel step line between whole-pixel joints (Bresenham).
         let x = Math.floor(ax), y = Math.floor(ay);
@@ -523,7 +529,7 @@ export class GeckoRenderer {
         let err = dx + dy, i = 0;
         for (;;) {
           const u = i++ / n;
-          put(x, y, l0 + (l1 - l0) * u, z0 + (z1 - z0) * u);
+          put(x, y, l0 + (l1 - l0) * u, z0 + (z1 - z0) * u, w);
           if (x === x1 && y === y1) break;
           const e2 = 2 * err;
           if (e2 >= dy) { err += dy; x += sx; }
@@ -534,7 +540,7 @@ export class GeckoRenderer {
       const n = Math.max(1, Math.ceil(Math.hypot(cx - ax, cy - ay) * 2));
       for (let s = 0; s <= n; s++) {
         const u = s / n;
-        put(ax + (cx - ax) * u, ay + (cy - ay) * u, l0 + (l1 - l0) * u, z0 + (z1 - z0) * u);
+        put(ax + (cx - ax) * u, ay + (cy - ay) * u, l0 + (l1 - l0) * u, z0 + (z1 - z0) * u, w);
       }
     };
     line(hip.x, hip.y, knee.x, knee.y, 0, lift * 0.5, zh, zk);
@@ -545,7 +551,7 @@ export class GeckoRenderer {
     const dir = this.lockToes ? leg.toe : blendAngle(Math.atan2(oy, ox), fwdBias, leg.def.front ? 0.5 : 0.35);
     for (const spread of [-0.75, 0.75]) {
       // A short claw line from the foot, so it stays attached however fine the grid.
-      line(foot.x, foot.y, foot.x + Math.cos(dir + spread) * 1.2 * res, foot.y + Math.sin(dir + spread) * 1.2 * res, 0, 0, zf, zf);
+      line(foot.x, foot.y, foot.x + Math.cos(dir + spread) * 1.2 * res, foot.y + Math.sin(dir + spread) * 1.2 * res, 0, 0, zf, zf, this.fine);
     }
   }
 }
