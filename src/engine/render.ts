@@ -519,8 +519,9 @@ export class GeckoRenderer {
         const s = Math.sign(fx) || 1, w = this.brush;
         let ex = Math.floor(this.headAt.x - s * 0.5 * res), ey = Math.floor(this.headAt.y) - w;
         for (let k = 0; k < 3 && !(onHead({ x: ex, y: ey }) && onHead({ x: ex - s * w, y: ey }) && onHead({ x: ex, y: ey - w })); k++) ey += 1;
+        // Open (or drowsy), a single square; shut, a two-square line.
         px({ x: ex, y: ey }, pal.eye, w);
-        px({ x: ex - s * w, y: ey }, pal.eye, w);
+        if (b.lid > 0.9) px({ x: ex - s * w, y: ey }, pal.eye, w);
         continue;
       }
       if (this.eyeStyle === 'dot') { px(e, col, this.brush); continue; }

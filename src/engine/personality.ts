@@ -952,18 +952,30 @@ const StateHandlers: Record<State, Handler> = {
           if (sd.t === 40) g.flick();
           if (sd.t >= 170) { sd.phase = 'asleep'; sd.t = 0; }
           break;
-        case 'wake':
-          // The same in reverse, and quicker: eyes open, tail and limbs up, up on its
-          // legs, the view turns back.
-          sd.lids = 1 - ease(0, 6);
-          sd.droop = 1 - ease(6, 12);
-          sd.hind = 1 - ease(8, 10);
-          sd.front = 1 - ease(10, 10);
-          sd.stand = ease(20, 12);
-          sd.tilt = 1 - ease(30, 18);
-          if (sd.t >= 50) { g.blink(); g.flick(); return { targetSpeed: 0, transition: STATE.IDLE }; }
+        case 'wake': {
+          // Waking: the eye opens and it lies a moment, tasting the air; it gathers the arm
+          // and the leg back up and pushes itself up onto its legs; then it sets off, the
+          // tail lifting and the view turning back as it goes.
+          sd.lids = 1 - ease(0, 5);
+          if (sd.t === 12) g.flick();
+          if (sd.t === 24) g.headLook.look();
+          sd.front = 1 - ease(30, 8);
+          sd.hind = 1 - ease(36, 8);
+          sd.stand = ease(40, 12);
+          sd.droop = 1 - ease(50, 14);
+          sd.tilt = 1 - ease(54, 22);
           b.dangle = { front: sd.front, hind: sd.hind };
+          if (sd.t >= 76) {
+            // Off along the block the way it's facing, rather than wheeling about.
+            const w = g.c.world.clampToBounds(head.x + sd.face * 60, head.y, 10);
+            g.flick();
+            g.summon(w);
+            return { targetSpeed: g.speed * 0.5 };
+          }
+          // Moving off as it comes out of it.
+          if (sd.t >= 52) { g.targetAngle = sd.face > 0 ? 0 : Math.PI; return { targetSpeed: g.speed * 0.5 * ease(52, 16) }; }
           return { targetSpeed: 0 };
+        }
       }
       b.dangle = { front: sd.front, hind: sd.hind };
       // Settling or asleep. The block scrolled away or the note changed under it: up.
