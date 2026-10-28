@@ -220,9 +220,17 @@ export class PetEngine {
       const out = 40;
       const cx = Math.min(Math.max(n.x, box.left / px - out), box.right / px + out), cy = Math.min(Math.max(n.y, box.top / px - out), box.bottom / px + out);
       if (cx !== n.x || cy !== n.y) b.translate(cx - n.x, cy - n.y);
-      this.offPage = box;
-      this.returning = false;
     }
+    // Any of it carried past the edge — a snout, a foot, long before the neck — is clipped
+    // like the page's content, never drawn over the header above it.
+    if (!this.onPage(box)) { this.offPage = box; this.returning = false; }
+  }
+
+  /** All of it — body, snout and feet — well inside `box` (CSS px). */
+  private onPage(box: DOMRect) {
+    const b = this.body, px = this.opts.px, m = 3 * px;
+    const ok = (p: { x: number; y: number }) => p.x * px > box.left + m && p.x * px < box.right - m && p.y * px > box.top + m && p.y * px < box.bottom - m;
+    return b.pts.every(ok) && b.legs.every((l) => ok(l.foot)) && ok(this.brain.snout());
   }
 
   /** Off the edge of a scrolled page: the page's box (CSS px) it is clipped to, until it is back. */
@@ -236,9 +244,7 @@ export class PetEngine {
     const box = this.offPage, b = this.body, px = this.opts.px;
     if (!box) return;
     if (b.isHeld) { this.offPage = null; return; }
-    const m = 2;
-    const all = b.pts.every((p) => p.x * px > box.left + m && p.x * px < box.right - m && p.y * px > box.top + m && p.y * px < box.bottom - m);
-    if (all) { this.offPage = null; this.returning = false; return; }
+    if (this.onPage(box)) { this.offPage = null; this.returning = false; return; }
     const now = performance.now();
     // Something else caught its attention on the way back: send it again.
     if (this.returning && now - this.returnedAt > 2500) this.returning = false;

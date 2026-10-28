@@ -52,7 +52,12 @@ export class Footprints {
 
   /** The page scrolled under these prints (art px). */
   shift(dx: number, dy: number, inside: (x: number, y: number) => boolean) {
-    for (const p of this.prints) if (inside(p.x, p.y)) { p.x += dx; p.y += dy; }
+    // Carried off the page, they're gone with it, not left drawn over the header.
+    this.prints = this.prints.filter((p) => {
+      if (!inside(p.x, p.y)) return true;
+      p.x += dx; p.y += dy;
+      return inside(p.x, p.y);
+    });
   }
 
   get active() { return this.prints.length > 0; }
