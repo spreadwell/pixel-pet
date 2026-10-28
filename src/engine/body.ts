@@ -448,7 +448,7 @@ export class Body {
       // Out to the ledge side: the animal's left is (f.y, -f.x).
       const vx = this.curlDir * f.y, vy = -this.curlDir * f.x;
       if ((leg.hip.x - p.x) * vx + (leg.hip.y - p.y) * vy <= 0) continue;
-      const reach = (leg.def.l1 + leg.def.l2) * 0.95, back = leg.def.front ? 0.5 : -0.8, k = this.curl;
+      const reach = (leg.def.l1 + leg.def.l2) * 0.7, back = leg.def.front ? 0.5 : -0.8, k = this.curl;
       const fx = leg.hip.x + vx * reach + f.x * back, fy = leg.hip.y + vy * reach + f.y * back;
       leg.foot.x = lerp(leg.foot.x, fx, k); leg.foot.y = lerp(leg.foot.y, fy, k);
       // A limp, slight bend at the elbow or knee.

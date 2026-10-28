@@ -627,7 +627,7 @@ export class GeckoRenderer {
     line(hip.x, hip.y, knee.x, knee.y, 0, lift * 0.5, zh, zk);
     line(knee.x, knee.y, foot.x, foot.y, lift * 0.5, lift, zk, zf);
     // Side-on, a limb hanging over the edge ends in a little hand: fingers splayed below.
-    if (this.tiltA > 0.6 && near && foot.y - hip.y > 2 * res) {
+    if (this.tiltA > 0.6 && near && foot.y - hip.y > res) {
       put(foot.x - this.fine, foot.y + this.fine, 0, zf, this.fine);
       put(foot.x + this.fine, foot.y + this.fine, 0, zf, this.fine);
       return;
