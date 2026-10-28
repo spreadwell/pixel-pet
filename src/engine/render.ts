@@ -129,6 +129,8 @@ export class GeckoRenderer {
   private up = new Float32Array(0);
   private tiltA = 0;
   private tiltCos = 1;
+  /** Canvas pixels per art pixel, rounded: the brush for legs, eyes and the face. */
+  private brush = 1;
   private tiltSin = 0;
   /** Carve the neck narrower than the head and shoulders, whichever way it faces. */
   pinchNeck = true;
@@ -147,6 +149,7 @@ export class GeckoRenderer {
     this.tiltA = tilt ? tilt.amount : 0;
     const phi = this.tiltA * TILT, cos = Math.cos(phi), sin = Math.sin(phi);
     this.tiltCos = cos; this.tiltSin = sin;
+    this.brush = Math.max(1, Math.round(res));
     const a0 = b.pts[2], a1 = b.pts[HIP], axisX = b.pts[12].x;
     const axis = tilt ? clamp((a1.y - a0.y) / (a1.x - a0.x || 1), -0.5, 0.5) : 0;
     const project: Project = (x, y, z, h = 0) => {
@@ -196,7 +199,7 @@ export class GeckoRenderer {
       const ax = (p.x + 0.5) / res, ay = (p.y + 0.5) / res;
       const o = this.tiltA > 0.6 ? 0 : castShadow(b, p.z, ax, ay);
       const q = project(ax + o, ay + o, b.ground(ax + o, ay + o));
-      mark(Math.floor(q.x), Math.floor(q.y));
+      for (let by = 0; by < this.brush; by++) for (let bx = 0; bx < this.brush; bx++) mark(Math.floor(q.x) + bx, Math.floor(q.y) + by);
     }
     ctx.fillStyle = pal.shadow;
     for (let y = 0; y < sh; y++) for (let x = 0; x < sw; x++) {
@@ -206,9 +209,12 @@ export class GeckoRenderer {
     // Side-on, the far legs are hidden behind the body and the near ones drawn over it,
     // a shade darker so elbow and knee stand out against the flank.
     const sideOn = this.tiltA > 0.6;
-    for (const p of legs) if (!sideOn || !p.near) { if (sideOn) continue; ctx.fillStyle = p.c; ctx.fillRect(p.x, p.y, 1, 1); }
+    // Fine features are drawn with a brush the size of an art pixel, so at a finer
+    // resolution a leg stays as thick, relative to the body, as it is at 1×.
+    const B = this.brush;
+    for (const p of legs) if (!sideOn || !p.near) { if (sideOn) continue; ctx.fillStyle = p.c; ctx.fillRect(p.x, p.y, B, B); }
     this.paintBody(ctx, b, pal);
-    if (sideOn) for (const p of legs) if (p.near) { ctx.fillStyle = pal.crease; ctx.fillRect(p.x, p.y, 1, 1); }
+    if (sideOn) for (const p of legs) if (p.near) { ctx.fillStyle = pal.crease; ctx.fillRect(p.x, p.y, B, B); }
     this.paintHead(ctx, b, pal, project, res);
   }
 
@@ -371,7 +377,7 @@ export class GeckoRenderer {
       const q = project(p.x + lx * side, p.y + ly * side, b.z[k], b.width(k) * FLAT_HEAD * 1.5);
       return { x: Math.floor(q.x), y: Math.floor(q.y) };
     };
-    const px = (p: { x: number; y: number }, c: string) => { ctx.fillStyle = c; ctx.fillRect(p.x, p.y, 1, 1); };
+    const px = (p: { x: number; y: number }, c: string) => { ctx.fillStyle = c; ctx.fillRect(p.x, p.y, this.brush, this.brush); };
     const s0 = (1 + NEARER * Math.max(0, b.z[0])) * res;
 
     // One dark pixel per eye, on the sides of the skull; closed, it reads as shade. Each is
