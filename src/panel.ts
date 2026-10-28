@@ -12,13 +12,14 @@ const STATE_ICONS: Record<string, string> = {
   idle: 'paw', basking: 'sun', explore: 'look', scout: 'look', hunt: 'bug', feast: 'bug',
   startle: 'bang', flee: 'bang', sleep: 'moon', nap: 'moon', nibble: 'letter', held: 'hand',
   watch: 'paw', inspect: 'letter', lurk: 'paw', curious: 'paw', retreat: 'look', play: 'ball',
-  prank: 'flame', hide: 'paw', away: 'paw',
+  prank: 'flame', search: 'look', hide: 'paw', away: 'paw',
 };
 
 /** And one for each kind of diary entry. */
 const DIARY_ICONS: Record<DiaryKind, string> = {
   catch: 'bug', letter: 'letter', nap: 'moon', sleep: 'moon', play: 'ball', prank: 'flame', snack: 'bug',
   explore: 'look', retreat: 'look', petted: 'heart', held: 'hand', startle: 'bang', pushups: 'up', bask: 'sun',
+  search: 'look', cheer: 'up',
 };
 
 type Button = { action: Action; el: HTMLButtonElement; icon: HTMLElement; label: HTMLElement; shown: string };

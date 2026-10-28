@@ -99,7 +99,7 @@ export interface Ctx {
 }
 
 /** The kinds of thing its diary records. */
-export type DiaryKind = 'catch' | 'letter' | 'nap' | 'sleep' | 'play' | 'prank' | 'snack' | 'explore' | 'retreat' | 'petted' | 'held' | 'startle' | 'pushups' | 'bask';
+export type DiaryKind = 'catch' | 'letter' | 'nap' | 'sleep' | 'play' | 'prank' | 'snack' | 'explore' | 'retreat' | 'petted' | 'held' | 'startle' | 'pushups' | 'bask' | 'search' | 'cheer';
 
 /**
  * A button on screen it could press (art px): where to press it, and what pressing it
@@ -256,6 +256,7 @@ export const STATE = {
   PLAY: 'play',
   NAP: 'nap',
   PRANK: 'prank',
+  SEARCH: 'search',
 } as const;
 export type State = (typeof STATE)[keyof typeof STATE];
 
@@ -353,17 +354,33 @@ const StateHandlers: Record<State, Handler> = {
     },
   },
 
+  // Basking where it is; or, with a picture in a note close by, off to lie on it first —
+  // a warm rock — and bask there a good while longer, eyes half shut.
   [STATE.BASKING]: {
     enter(g) {
-      if (!g.petted) g.c.log?.('bask', 'Basked');
       const nearHome = g.distTo(g.homeX, g.homeY) < 80 * S;
       const baseDur = g.traits.resolve('baskDuration');
       const fullBonus = nearHome && g.needs.hunger > 70 ? g.needs.fullness * baseDur * 1.5 : 0;
       g.stateData = { duration: baseDur + Math.random() * baseDur * 1.5 + fullBonus, nextLookTime: 60 + Math.random() * 80, nextBlinkTime: 40 + Math.random() * 50 };
+      const warm = g.petted ? null : g.warmSpot(360);
+      if (warm) { g.stateData.warm = warm; g.stateData.going = true; g.stateData.leg = 0; g.planRoute(warm.x, warm.y); return; }
+      if (!g.petted) g.c.log?.('bask', 'Basked');
       if (Math.random() < 0.2) g.schedulePushups(40 + Math.random() * Math.max(0, g.stateData.duration - 120));
     },
     update(g) {
       const t = g.stateTimer, d = g.stateData;
+      if (d.going) {
+        const w = d.warm, head = g.head;
+        if (dist(head.x, head.y, w.x, w.y) < 6 || ++d.leg > 700) {
+          d.going = false; d.onWarm = true;
+          d.duration = t + d.duration * 1.8;
+          g.c.log?.('bask', 'Basked on a picture');
+          return { targetSpeed: 0 };
+        }
+        const wp = g.waypoint(w.x, w.y);
+        g.targetAngle = Math.atan2(wp.y - head.y, wp.x - head.x);
+        return { targetSpeed: g.speed * 0.9 };
+      }
       if (g.pushups()) return { targetSpeed: 0 };
       if (g.petted) d.duration = Math.max(d.duration, t + 60);
       if (t > d.nextLookTime && !g.petted) { g.headLook.look(); d.nextLookTime = t + 80 + Math.random() * 100; }
@@ -541,7 +558,12 @@ const StateHandlers: Record<State, Handler> = {
       // The jump: up fast, and down a touch slower.
       if (!g.mildScare) b.hop = t < 3 ? 2.4 * (t / 3) : t < 8 ? 2.4 * (1 - smoothstep((t - 3) / 5)) : 0;
       g.headLook.lookAt(angleDiff(g.angle, Math.atan2(g.threatY - g.head.y, g.threatX - g.head.x)));
-      if (t > 8 + sd.freeze) { b.hop = 0; return { targetSpeed: 0, transition: STATE.FLEE }; }
+      if (t > 8 + sd.freeze) {
+        b.hop = 0;
+        // Jumped at a noise, not at something coming for it: a long look, and it settles.
+        if (sd.stay) { g.watching = { x: g.threatX, y: g.threatY }; return { targetSpeed: 0, transition: STATE.WATCH }; }
+        return { targetSpeed: 0, transition: STATE.FLEE };
+      }
       return { targetSpeed: 0 };
     },
   },
@@ -891,6 +913,56 @@ const StateHandlers: Record<State, Handler> = {
       const wp = g.waypoint(c.x, c.y);
       g.targetAngle = Math.atan2(wp.y - head.y, wp.x - head.x);
       return { targetSpeed: g.speed * 1.2 };
+    },
+  },
+
+  // Following your search: while find-in-note has a match on screen, it goes to the one
+  // you're on, sniffs it over, and waits by it; when you step to the next it's off after
+  // it. (With every match marked, it works its way down the others meanwhile.) Search
+  // closed, or left alone a good while, it wanders off.
+  [STATE.SEARCH]: {
+    enter(g) {
+      g.stateData = { at: null, done: null, chosen: '', pause: 0, leg: 0, seen: 0, wait: 0, t: 0 };
+      g.flick();
+      g.c.log?.('search', 'Sniffed out your search');
+    },
+    update(g) {
+      const sd = g.stateData, head = g.head, ms = g.c.world.matches;
+      sd.t++;
+      if (!ms.length || sd.t > 7200 || sd.seen > 24) { g.searchCooldown = 600; return { targetSpeed: 0, transition: STATE.IDLE }; }
+      const same = (a: Rect | null, b: Rect) => !!a && Math.abs(a.x - b.x) < 2 && Math.abs(a.y - b.y) < 2;
+      const current = ms.find((m) => m.current);
+      // You stepped to another match: drop what it was doing and go.
+      if (current && sd.at && sd.chosen === 'current' && !same(sd.at, current)) { sd.at = null; sd.pause = 0; }
+      if (!sd.at) {
+        // The one you're on; or, done with that, the next one below where it has been.
+        const d: Rect | null = sd.done;
+        const after = (m: Rect) => !d || m.y > d.y + 1 || (Math.abs(m.y - d.y) <= 1 && m.x > d.x + 1);
+        const others = ms.filter((m) => !same(d, m));
+        const next = current && !same(d, current) ? current : others.find(after) ?? others[0];
+        if (!next) {
+          // Nothing new to sniff: wait by it, looking, for you to go on.
+          if (d) g.headLook.lookAt(angleDiff(g.angle, Math.atan2(d.y + d.h / 2 - head.y, d.x + d.w / 2 - head.x)));
+          if (++sd.wait % 70 === 0) g.flick();
+          if (sd.wait > 900) { g.searchCooldown = 900; return { targetSpeed: 0, transition: STATE.IDLE }; }
+          return { targetSpeed: 0 };
+        }
+        sd.at = next; sd.chosen = next === current ? 'current' : 'next'; sd.leg = 0; sd.wait = 0;
+      }
+      const m: Rect = sd.at;
+      // Nose to the word: just below it, at its middle.
+      const tx = m.x + m.w / 2, ty = m.y + m.h + 3;
+      if (sd.pause > 0) {
+        if (sd.pause % 22 === 0) g.flick();
+        g.headLook.lookAt(angleDiff(g.angle, Math.atan2(m.y + m.h / 2 - head.y, tx - head.x)));
+        if (--sd.pause <= 0) { sd.done = m; sd.at = null; sd.seen++; }
+        return { targetSpeed: 0 };
+      }
+      if (dist(head.x, head.y, tx, ty) < 5 || ++sd.leg > 1500) { sd.pause = 50 + Math.floor(Math.random() * 40); return { targetSpeed: 0 }; }
+      const wp = g.waypoint(tx, ty), far = dist(head.x, head.y, tx, ty);
+      g.targetAngle = Math.atan2(wp.y - head.y, wp.x - head.x);
+      // Eager: it hurries over, slowing for the last bit.
+      return { targetSpeed: g.speed * (far > 30 ? 1.8 : 1) };
     },
   },
 
@@ -1502,6 +1574,44 @@ export class Personality {
     this.display = { at: this.stateTimer + inTicks, bobs: 2 + Math.floor(Math.random() * 3) };
   }
 
+  /** A spot on a picture on screen within `range` (art px) to bask on, if there is one. */
+  warmSpot(range: number) {
+    const h = this.head;
+    let best: { x: number; y: number } | null = null, bd = range;
+    for (const r of this.c.world.warm) {
+      const x = r.x + r.w * (0.3 + Math.random() * 0.4), y = r.y + r.h * (0.35 + Math.random() * 0.3), d = dist(h.x, h.y, x, y);
+      if (d < bd) { bd = d; best = { x, y }; }
+    }
+    return best;
+  }
+
+  /** Not off after your search again for a while. */
+  searchCooldown = 0;
+
+  /** A big chunk of text deleted at (x, y): it jumps at the crash and looks over; right beside it, it bolts. */
+  crash(x: number, y: number) {
+    const st = this.state;
+    if (st === STATE.HELD || st === STATE.STARTLE || st === STATE.FLEE) return;
+    if (this.bodyDistance(x, y) < 25) { this.scareFrom({ x, y }); return; }
+    if (dist(this.head.x, this.head.y, x, y) > 260) return;
+    this.threatX = x; this.threatY = y;
+    this.mildScare = this.c.opts.reducedMotion;
+    this.forcedNap = false;
+    this.petted = false;
+    this.enterState(STATE.STARTLE);
+    this.stateData.stay = true;
+  }
+
+  /** You ticked off the last open task in a note: a few proud push-ups. */
+  cheer() {
+    const st = this.state;
+    if (st !== STATE.IDLE && st !== STATE.BASKING && st !== STATE.EXPLORE && st !== STATE.LURK && st !== STATE.CURIOUS && st !== STATE.WATCH && st !== STATE.INSPECT) return;
+    this.enterState(STATE.IDLE);
+    this.stateData.duration = 400;
+    this.display = { at: this.stateTimer + 8, bobs: 4 };
+    this.c.log?.('cheer', 'Cheered you finishing your tasks');
+  }
+
   /** In a graph view with a node close by, and not played lately: fancy a game? */
   wantsToPlay() {
     if (this.playCooldown > 0 || !this.c.graph || Math.random() > 0.7) return false;
@@ -2022,6 +2132,7 @@ export class Personality {
       case STATE.RETREAT: return 'Hiding on the side panel';
       case STATE.PLAY: return 'Playing';
       case STATE.PRANK: return sd.target?.kind === 'food' ? 'Asking for food' : 'Up to something';
+      case STATE.SEARCH: return 'Following your search';
       default: return s;
     }
   }
@@ -2237,6 +2348,10 @@ export class Personality {
     if (this.mischiefCooldown > 0) this.mischiefCooldown--;
     if (this.alarm > 0) this.alarm--;
     if (this.snackCooldown > 0) this.snackCooldown--;
+    if (this.searchCooldown > 0) this.searchCooldown--;
+    // You're searching the note: it comes to help.
+    const free = this.state === STATE.IDLE || this.state === STATE.BASKING || this.state === STATE.EXPLORE || this.state === STATE.CURIOUS || this.state === STATE.SCOUT;
+    if (this.searchCooldown <= 0 && this.c.world.matches.length && this.calm && free) this.enterState(STATE.SEARCH);
     if (this.napCooldown > 0) this.napCooldown--;
     this.typing = c.input.typedWithin(c.now, 3500);
     // A notice goes away by itself after a few seconds; a drag lure is refreshed while it moves.
@@ -2292,7 +2407,7 @@ export class Personality {
     const sleeping = this.state === STATE.SLEEP;
     const napping = this.state === STATE.NAP && (this.stateData.phase === 'settle' || this.stateData.phase === 'asleep');
     b.curlTarget = sleeping || napping ? 1 : 0;
-    b.lidTarget = sleeping ? (this.sleepPeeking ? 0.25 : 1) : this.state === STATE.NAP && this.stateData.lids ? this.stateData.lids : this.petted ? 0.55 : 0;
+    b.lidTarget = sleeping ? (this.sleepPeeking ? 0.25 : 1) : this.state === STATE.NAP && this.stateData.lids ? this.stateData.lids : this.petted ? 0.55 : this.state === STATE.BASKING && this.stateData.onWarm ? 0.5 : 0;
     b.breathRate = sleeping || napping || this.state === STATE.BASKING || this.petted ? 0.29 : 0.57;
     b.breathDepth = sleeping ? 0.085 : 0.05;
     b.tailTwitch = this.state === STATE.HUNT && this.stateData.phase === 'ready' ? 1 : this.state === STATE.PLAY ? 0.8 : this.state === STATE.PRANK && this.stateData.phase === 'raise' ? 0.6 : this.state === STATE.HELD ? 0.8 : this.state === STATE.LURK && (this.stateData.frozen || this.stateData.phase === 'wary') ? 0.5 : this.state === STATE.NIBBLE && this.stateData.phase === 'grab' && this.stateData.stuck ? 0.6 : this.state === STATE.HUNT ? 0.7 : this.state === STATE.STARTLE ? (this.stateTimer < 10 ? 1 : 0) : 0;

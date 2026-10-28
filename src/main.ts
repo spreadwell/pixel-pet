@@ -11,11 +11,12 @@ import { MISCHIEF_MINUTES, PixelPetSettingTab, DEFAULT_SETTINGS, PetSettings, se
 
 const WORD = /[\p{L}\p{N}]+/gu;
 const DONE_TASK = /^\s*(?:[-*+]|\d+[.)])\s+\[[xX]\]/gm;
+const OPEN_TASK = /^\s*(?:[-*+]|\d+[.)])\s+\[ \]/gm;
 
 export default class PixelPetPlugin extends Plugin {
   settings: PetSettings = { ...DEFAULT_SETTINGS };
   private engine: PetEngine | null = null;
-  private counts = new Map<string, { words: number; tasks: number }>();
+  private counts = new Map<string, { words: number; tasks: number; open: number }>();
   /** Words written toward each kind of bug's next one. */
   private wordBank: Record<BugKind, number> = { fly: 0, cricket: 0 };
   /** When each kind of bug next turns up of its own accord (ms). */
@@ -190,10 +191,12 @@ export default class PixelPetPlugin extends Plugin {
   /** Writing and finished tasks bring out bugs, each kind as its settings say. */
   private feed(key: string, text: string) {
     const words = text.match(WORD)?.length ?? 0;
-    const tasks = text.match(DONE_TASK)?.length ?? 0;
+    const tasks = text.match(DONE_TASK)?.length ?? 0, open = text.match(OPEN_TASK)?.length ?? 0;
     const before = this.counts.get(key);
-    this.counts.set(key, { words, tasks });
+    this.counts.set(key, { words, tasks, open });
     if (!before || !this.engine) return;
+    // The last open task ticked off: it's pleased for you.
+    if (before.open > 0 && open === 0 && tasks > before.tasks) this.engine.cheer();
     for (const kind of BUG_KINDS) {
       const c = this.settings.critters[kind];
       if (!c.enabled) continue;

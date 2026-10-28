@@ -145,7 +145,14 @@ export interface HappeningHandlers {
   drag(at: { x: number; y: number } | null): void;
   /** A scrolling element scrolled by (dx, dy) CSS px; its box. */
   scroll(box: DOMRect, dx: number, dy: number): void;
+  /** A big chunk of text was deleted or cut, here (CSS px). */
+  crash(x: number, y: number): void;
+  /** A big block of text was pasted. */
+  pasted(): void;
 }
+
+/** A selection at least this long, deleted or cut, makes a crash; a paste this long counts as big. */
+const BIG_DELETE = 40, BIG_PASTE = 80;
 
 export class Happenings {
   private off: (() => void)[] = [];
@@ -228,6 +235,20 @@ export class Happenings {
     on('wheel', prime);
     on('pointerdown', prime);
     on('touchstart', prime);
+    // Big edits: a long selection deleted or cut, a long block pasted.
+    const bigSelection = () => {
+      const sel = doc.getSelection();
+      if (!sel || sel.isCollapsed || !sel.rangeCount || sel.toString().length < BIG_DELETE) return null;
+      const r = sel.getRangeAt(0).getBoundingClientRect();
+      return r.width || r.height ? { x: r.left + r.width / 2, y: r.top + Math.min(r.height, 40) / 2 } : null;
+    };
+    on('keydown', (e) => {
+      if (e.key !== 'Backspace' && e.key !== 'Delete') return;
+      const at = bigSelection();
+      if (at) this.h.crash(at.x, at.y);
+    });
+    on('cut', () => { const at = bigSelection(); if (at) this.h.crash(at.x, at.y); });
+    on('paste', (e) => { if ((e.clipboardData?.getData('text/plain').length ?? 0) >= BIG_PASTE) this.h.pasted(); });
   }
 
   detach() { for (const f of this.off) f(); this.off = []; }

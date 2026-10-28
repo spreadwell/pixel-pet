@@ -93,6 +93,9 @@ export class PetEngine {
       notice: (box, el) => this.brain?.noticed({ x: (box.left + box.width / 2) / this.opts.px, y: (box.bottom + 18) / this.opts.px }, () => el.isConnected),
       drag: (at) => this.brain?.dragged(at ? { x: at.x / this.opts.px, y: at.y / this.opts.px } : null),
       scroll: (box, dx, dy) => this.scrolled(box, dx, dy),
+      crash: (x, y) => this.brain?.crash(x / this.opts.px, y / this.opts.px),
+      // A fly sometimes comes in with a big paste.
+      pasted: () => { if (this.allows('fly') && Math.random() < 0.5) this.win.setTimeout(() => this.spawnBug('fly'), 400); },
     });
     this.zzz = new Zzz(win);
     this.nibbler = new Nibbler(win);
@@ -193,6 +196,7 @@ export class PetEngine {
     this.brain?.newSurroundings(r && r.width > 0 ? { x: r.left / px, y: r.top / px, w: r.width / px, h: r.height / px } : null, asked);
   }
   private lastNoteChange = 0;
+  private matchesIn = 0;
 
   /** The prank targets, in art px. */
   private prankable(): Pranks | null {
@@ -293,6 +297,9 @@ export class PetEngine {
     const bug = this.swarm.spawn(kind, this.world, near);
     if (bug) bug.pace = paceFactor(this.opts.critters?.[kind]?.pace ?? 'normal');
   }
+
+  /** You ticked off the last open task in a note. */
+  cheer() { this.brain?.cheer(); }
 
   /** What the pet is up to, in a few words. */
   get activity() { return this.brain?.activity ?? 'Away'; }
@@ -486,6 +493,11 @@ export class PetEngine {
 
     this.scanIn -= TICK;
     if (this.scanIn <= 0) { this.world.scan(); this.scanIn = 0.5; }
+    // While you search, the matches are kept up with as you step through them.
+    else if (--this.matchesIn <= 0) {
+      this.matchesIn = 6;
+      if (this.world.matches.length || this.win.document.querySelector('.document-search-container')) this.world.scanMatches();
+    }
     this.caretIn -= TICK;
     if (this.caretIn <= 0 && this.input.typedWithin(now, 3000)) { this.world.scanCaret(); this.caretIn = 0.1; }
     this.maintainIn -= TICK;

@@ -78,6 +78,10 @@ export class World {
   covers: Rect[] = [];
   /** Code blocks and callouts in the note: flat stones it can nap on. */
   rocks: Rock[] = [];
+  /** Pictures in notes on screen: warm spots to bask on (art px). */
+  warm: Rect[] = [];
+  /** Find-in-note matches on screen, in reading order, and which one is current (art px). */
+  matches: (Rect & { current: boolean })[] = [];
   /** The open side panels: safe high ground to run to. */
   sidebars: Rect[] = [];
   /** Blocks of text on screen (paragraphs, headings, list runs). */
@@ -167,6 +171,8 @@ export class World {
     this.covers = covers;
     this.sidebars = covers.filter((r) => r.w >= 30 && r.h >= 60);
     this.rocks = this.scanRocks();
+    this.warm = this.scanWarm();
+    this.scanMatches();
     const mesas = this.scanText();
     this.buildHeights(mesas);
 
@@ -355,6 +361,31 @@ export class World {
    * Code blocks and callouts on screen, in reading view and live preview (where a code
    * block is a run of line elements, merged here into one stone).
    */
+  private scanWarm(): Rect[] {
+    const vw = this.win.innerWidth, vh = this.win.innerHeight, out: Rect[] = [];
+    this.win.document.querySelectorAll<HTMLElement>('.workspace-leaf .markdown-rendered img, .workspace-leaf .cm-content img, .workspace-leaf .ProseMirror img').forEach((el) => {
+      const r = el.getBoundingClientRect();
+      if (r.width < 60 || r.height < 40 || r.bottom < 0 || r.top > vh || r.right < 0 || r.left > vw) return;
+      const a = this.toArt(r);
+      if (!this.coverAt(a.x + a.w / 2, a.y + a.h / 2)) out.push(a);
+    });
+    return out;
+  }
+
+  /** The search matches only: cheap enough to keep up with while you step through them. */
+  scanMatches() {
+    const vh = this.win.innerHeight, out: (Rect & { current: boolean })[] = [];
+    // Obsidian's own find-in-note highlights just the match you're on; CodeMirror's search
+    // marks them all, the one you're on as selected.
+    this.win.document.querySelectorAll<HTMLElement>('.workspace-leaf .obsidian-search-match-highlight, .workspace-leaf .cm-searchMatch').forEach((el) => {
+      if (out.length >= 40) return;
+      const r = el.getBoundingClientRect();
+      if (r.width < 2 || r.bottom < 0 || r.top > vh) return;
+      out.push({ ...this.toArt(r), current: el.matches('.obsidian-search-match-highlight, .cm-searchMatch-selected') });
+    });
+    this.matches = out.sort((a, b) => a.y - b.y || a.x - b.x);
+  }
+
   private scanRocks(): Rock[] {
     const doc = this.win.document, vh = this.win.innerHeight;
     const rects: { r: DOMRect; kind: Rock['kind'] }[] = [];
