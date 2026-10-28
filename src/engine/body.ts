@@ -90,6 +90,10 @@ const STRIDE_MIN = 6;
 const STRIDE_MAX = 8;
 /** A limb stretched past this fraction of its length looks locked straight. */
 const COMFORT = 0.9;
+/** Curled up asleep: how much each joint of the trunk and of the tail bends (radians). */
+const CURL_TRUNK = 0.14, CURL_TAIL = 0.2;
+/** Draped over a ledge: how much each of the first few joints of the tail turns it over. */
+const CURL_DRAPE = 0.19;
 const MAX_STEP_HZ = 8;
 /** Steepest the body drapes over a step: height change per art px of spine. */
 const DRAPE_SLOPE = 0.8;
@@ -186,9 +190,11 @@ export class Body {
   breathRate = 0.55;     // Hz
   breathDepth = 0.05;
 
-  curl = 0;              // 0 straight → 1 coiled (sleep)
+  curl = 0;              // 0 straight → 1 curled up in a C (sleep)
   curlTarget = 0;
   curlDir: 1 | -1 = 1;
+  /** How it lies when it settles: curled round in a C, or stretched out with the tail draped to one side (over a ledge). */
+  curlStyle: 'coil' | 'drape' = 'coil';
 
   tailTwitch = 0;        // amplitude target 0..1
   /** Winding up to pounce: the hips and tail base wiggle side to side, 0..1. */
@@ -384,6 +390,7 @@ export class Body {
 
     // ── Trunk and tail follow with stiffness ────────────────
     this.curl = approach(this.curl, this.curlTarget, this.curlTarget > this.curl ? 0.9 : 2.2, dt);
+    if (this.curlTarget === 0 && this.curl < 0.02) this.curlStyle = 'coil';
     const path = this.path;
     for (let i = 0; i <= NECK; i++) { path[i].x = this.pts[i].x; path[i].y = this.pts[i].y; }
     let prevAng = this.heading + Math.PI;
@@ -393,6 +400,10 @@ export class Body {
       const maxB = BEND(i);
       let d = angleDiff(prevAng, ang);
       d = clamp(d, -maxB, maxB);
+      // Curling up to sleep, every joint behind the neck bends the same way — the trunk a
+      // little, the tail more — until the body lies in a C with the head by its tail tip.
+      // Draped, the trunk lies straight and only the base of the tail turns, off to the side.
+      if (this.curl > 0) d = lerp(d, this.curlDir * (this.curlStyle === 'coil' ? (i <= HIP ? CURL_TRUNK : CURL_TAIL) : i > HIP && i <= HIP + 8 ? CURL_DRAPE : 0), this.curl);
       ang = prevAng + d;
       const len = segH(this.z[i] - this.z[i - 1]);
       p.x = a.x + Math.cos(ang) * len;
@@ -417,8 +428,6 @@ export class Body {
       if (i > HIP) off += Math.sin(this.gaitPhase * TAU - (i - HIP) * 0.4) * this.flexAmp * 0.8 * Math.min(1, (i - HIP) / 4);
       // Winding up to pounce: a quick side-to-side wiggle of the hips and tail base.
       if (this.wiggle > 0.01 && i > HIP - 4 && i < HIP + 9) off += Math.sin(this.time * 30) * this.wiggle * 0.7 * (1 - Math.abs(i - HIP - 2) / 7);
-      // At rest the tail lies in a loose curve to one side.
-      if (i > HIP) off += this.curlDir * this.curl * 0.018 * (i - HIP) * (i - HIP);
       this.pts[i].x = p.x + (fy / fl) * off;
       this.pts[i].y = p.y - (fx / fl) * off;
     }

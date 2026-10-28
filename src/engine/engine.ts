@@ -8,7 +8,7 @@ import { Palette, buildPalette } from './palette';
 import { BrainOptions, Ctx, Personality, Playground, STATE } from './personality';
 import { Reactions } from './reactions';
 import { GeckoRenderer } from './render';
-import { SideNapRenderer } from './sidenap';
+import { Zzz } from './zzz';
 import { Footprints, Happenings, HoverSim } from './surroundings';
 import { World } from './world';
 
@@ -47,7 +47,7 @@ export class PetEngine {
   private particles = new Particles();
   private nibbler: Nibbler;
   private renderer = new GeckoRenderer();
-  private napper = new SideNapRenderer();
+  private zzz = new Zzz();
   private body!: Body;
   private brain!: Personality;
   private pal!: Palette;
@@ -418,10 +418,12 @@ export class PetEngine {
       for (const c of covers) g.rect(Math.round(c.x * res), Math.round(c.y * res), Math.round(c.w * res), Math.round(c.h * res));
       g.clip('evenodd');
     }
-    // Napping on a block it is seen from the side; otherwise from above.
-    const nap = this.brain.sideNap;
-    if (nap) this.napper.draw(g, pal, nap, performance.now(), res);
-    else this.renderer.draw(g, this.body, pal, res);
+    const ledge = this.brain.napLedge;
+    this.renderer.perch = ledge !== null ? { ledge, amount: this.body.curl } : null;
+    this.renderer.draw(g, this.body, pal, res);
+    // Fast asleep: Z's.
+    const h = this.body.pts[0];
+    this.zzz.draw(g, pal, this.brain.dozing ? this.body.project(h.x, h.y, this.body.z[0]) : null, performance.now(), res);
     if (this.brain.carrying) {
       const s = this.brain.snout(), px = this.opts.px;
       this.reactions.hold((s.x + 0.5) * px, (s.y + 0.5) * px, this.body.headAngle);

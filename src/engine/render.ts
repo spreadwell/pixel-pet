@@ -60,6 +60,8 @@ function disc(cx: number, cy: number, r: number, fn: (x: number, y: number, dx: 
  * half, while nearly end-on the shaded side thins away to nothing.
  */
 const SHADE_EDGE = 0.04;
+/** Napping on a block: how much the top foreshortens, and how far what's past the edge droops. */
+const FORESHORTEN = 0.45, HANG = 0.35;
 /** Half-width of the pinched neck, art px: about two pixels across. */
 const NECK_HALF = 1.05;
 
@@ -96,6 +98,12 @@ export class GeckoRenderer {
   private snappedShadow = new Map<Leg, Snapped>();
   /** A pointed snout, no stray pixels on the head's outline, and eyes held steady. */
   steadyHead = true;
+  /**
+   * Napping on a block: the block's top edge (art px y) and how far into the nap (0..1).
+   * The view tips over to a three-quarter, mostly side-on one as it settles: the top of
+   * the block foreshortens, and whatever of the gecko is past the edge hangs down over it.
+   */
+  perch: { ledge: number; amount: number } | null = null;
   /** Carve the neck narrower than the head and shoulders, whichever way it faces. */
   pinchNeck = true;
   /** The eye pixels last drawn (left, right), held like the leg joints so they don't flicker. */
@@ -109,7 +117,13 @@ export class GeckoRenderer {
     this.light += (toLight - this.light) * 0.2;
 
     // Art px in, canvas pixels out.
-    const project: Project = (x, y, z) => { const p = b.project(x, y, z); return { x: p.x * res, y: p.y * res }; };
+    const lifted: Project = (x, y, z) => { const p = b.project(x, y, z); return { x: p.x * res, y: p.y * res }; };
+    const perch = this.perch && this.perch.amount > 0 ? this.perch : null;
+    const project: Project = perch ? (x, y, z) => {
+      const p = lifted(x, y, z), e = perch.ledge * res, a = perch.amount;
+      // On top: foreshortened toward the edge. Past it: hanging down over the face.
+      return { x: p.x, y: p.y < e ? e - (e - p.y) * (1 - FORESHORTEN * a) : e + (p.y - e) * (1 + HANG * a) };
+    } : lifted;
     const flat: Project = (x, y) => ({ x: x * res, y: y * res });
 
     this.frame(b, project, res);
