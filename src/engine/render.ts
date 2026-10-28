@@ -72,6 +72,12 @@ function disc(cx: number, cy: number, r: number, fn: (x: number, y: number, dx: 
  * half, while nearly end-on the shaded side thins away to nothing.
  */
 const SHADE_EDGE = 0.04;
+/** Napping on a block: the radius of the curve the tail droops over the block's end on, art px. */
+const DROOP = 3;
+/** Side-on, how much thinner the tail gets towards its tip. */
+const TAIL_TAPER = 0.6;
+/** Side-on, how many pixels wide the top of the head's dome is. */
+const DOME = 3;
 /** How far over the view tips for a nap: most of the way to side-on, keeping a little depth. */
 const TILT = (66 * Math.PI) / 180;
 /**
@@ -177,7 +183,13 @@ export class GeckoRenderer {
       // ...and past the end of the block, down beside it.
       if (tilt.end !== undefined && tilt.face) {
         const end = tilt.end * res, out = (end - px) * tilt.face;
-        if (out > 0) return { x: lerp(px, end - tilt.face * 0.5 * res, Math.min(1, out / (2 * res)) * this.tiltA), y: sy + out * this.tiltA };
+        if (out > 0) {
+          // Round the corner on an arc, then hang straight down: a droop, not a fold.
+          const R = DROOP * res, arc = (R * Math.PI) / 2, a = this.tiltA;
+          const th = Math.min(out, arc) / R, rest = Math.max(0, out - arc);
+          const dx = R * Math.sin(th), dy = R * (1 - Math.cos(th)) + rest;
+          return { x: lerp(px, end - tilt.face * dx, a), y: sy + dy * a };
+        }
       }
       return { x: px, y: sy };
     };
@@ -189,6 +201,7 @@ export class GeckoRenderer {
     if (this.pinchNeck) this.carveNeck(b, project, res);
     // (The snout taper is for the view from above; side-on the profile makes its own.)
     if (this.steadyHead && this.tiltA <= 0.6) this.taperSnout(b, project, res);
+    if (this.tiltA > 0.6) this.narrowDome(b, project, res);
     const legs = this.legPixels(b, pal, project, this.snapped, res);
 
     // The shadow: the body at its true size on the ground, each part offset by its height.
@@ -282,7 +295,9 @@ export class GeckoRenderer {
       // forward rather than drooping to the ground.
       const mid = i <= 4 ? b.width(2) * b.breathScale(2) * FLAT_HEAD : ra * fl;
       const { x: cx, y: cy } = project(sp.x, sp.y, z, mid, i > HIP);
-      const r = ra * (1 + NEARER * Math.max(0, z)) * res;
+      // Side-on the tail tapers right down to a fine tip.
+      const taper = i > HIP ? 1 - TAIL_TAPER * this.tiltA * ((i - HIP) / (SPINE - 1 - HIP)) : 1;
+      const r = ra * taper * (1 + NEARER * Math.max(0, z)) * res;
       // Tipped over, each round section is seen more from the side, so less tall.
       const ry = r * Math.sqrt(this.tiltCos ** 2 + (fl * this.tiltSin) ** 2);
       ellipse(cx, cy, r, ry, (x, y, dx, dy, d2) => {
@@ -332,6 +347,27 @@ export class GeckoRenderer {
         }
         if (Math.sqrt(best) / res > half(s)) depth[k] = 0;
       }
+    }
+  }
+
+  /**
+   * Side-on, the top of the head is a small dome: its top row is trimmed to a few pixels
+   * over the crown, so the head rounds off rather than running flat to the snout.
+   */
+  private narrowDome(b: Body, project: Project, res: number) {
+    const { bw, bh, bx, depth, seg } = this;
+    const crown = project(b.pts[2].x, b.pts[2].y, b.z[2], b.width(2) * FLAT_HEAD).x - bx;
+    const keep = DOME * res;
+    for (let y = 0; y < bh; y++) {
+      let any = false;
+      for (let x = 0; x < bw; x++) {
+        const k = y * bw + x;
+        // The topmost row of the head (where nothing of the body is above it).
+        if (depth[k] <= 0 || seg[k] > 4 || (y > 0 && depth[k - bw] > 0)) continue;
+        any = true;
+        if (Math.abs(x + 0.5 - crown) > keep / 2) depth[k] = 0;
+      }
+      if (any) break;
     }
   }
 
@@ -447,7 +483,7 @@ export class GeckoRenderer {
         // Side-on: a dash of an eye set into the side of the head, a row above its middle,
         // well inside the outline so it doesn't dent it.
         const s = Math.sign(fx) || 1, w = this.brush;
-        let ex = Math.floor(this.headAt.x + s * 0.5 * res), ey = Math.floor(this.headAt.y) - w;
+        let ex = Math.floor(this.headAt.x - s * 0.5 * res), ey = Math.floor(this.headAt.y) - w;
         for (let k = 0; k < 3 && !(onHead({ x: ex, y: ey }) && onHead({ x: ex - s * w, y: ey }) && onHead({ x: ex, y: ey - w })); k++) ey += 1;
         px({ x: ex, y: ey }, pal.eye, w);
         px({ x: ex - s * w, y: ey }, pal.eye, w);
