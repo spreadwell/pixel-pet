@@ -99,10 +99,14 @@ export class Bug {
 
     if (this.state === 'flying') {
       if (world.inBounds(this.x, this.y, 4)) this.inside = true;
-      if (this.inside) { const q = world.clampToBounds(this.x, this.y, 3); this.x = q.x; this.y = q.y; }
       if (Math.hypot(this.aim.x - this.x, this.aim.y - this.y) < 12) this.aim = world.clampToBounds(this.x + rand(-120, 120), this.y + rand(-80, 80), 10);
-      if (this.x < b.x + 4 || this.x > b.x + b.w - 4) this.heading = Math.PI - this.heading;
-      if (this.y < b.y + 4 || this.y > b.y + b.h - 4) this.heading = -this.heading;
+      // Once in, it bounces off the window's edges and can't leave; flying in, it heads
+      // straight for its aim (bouncing then would keep it stuck outside).
+      if (this.inside) {
+        if (this.x < b.x + 4 || this.x > b.x + b.w - 4) this.heading = Math.PI - this.heading;
+        if (this.y < b.y + 4 || this.y > b.y + b.h - 4) this.heading = -this.heading;
+        const q = world.clampToBounds(this.x, this.y, 3); this.x = q.x; this.y = q.y;
+      } else this.heading = Math.atan2(this.aim.y - this.y, this.aim.x - this.x);
       if (this.timer <= 0 && this.z < 0.8) {
         this.state = 'landed';
         this.timer = rand(1.5, 5.5);
@@ -186,18 +190,25 @@ export class Swarm {
   spawn(kind: BugKind, world: World, near?: { x: number; y: number }) {
     if (this.bugs.filter((b) => b.alive).length >= this.max) return null;
     const b = world.bounds;
-    const aim = near ? world.clampToBounds(near.x + rand(-60, 60), near.y + rand(-40, 40), 12) : world.clampToBounds(rand(0.2, 0.8) * b.w, rand(0.2, 0.8) * b.h);
+    const aim = near ? world.clampToBounds(near.x + rand(-60, 60), near.y + rand(-40, 40), 12) : world.clampToBounds(b.x + rand(0.2, 0.8) * b.w, b.y + rand(0.2, 0.8) * b.h);
     let x: number, y: number;
     if (kind === 'fly') {
-      // Flies drift in from the nearest window edge.
-      const side = Math.floor(rand(0, 4));
-      x = side === 0 ? -6 : side === 1 ? b.w + 6 : rand(0, b.w);
-      y = side === 2 ? -6 : side === 3 ? b.h + 6 : rand(0, b.h);
+      // Flies drift in from a window edge, the one nearest where they are headed.
+      const gaps = [aim.x - b.x, b.x + b.w - aim.x, aim.y - b.y, b.y + b.h - aim.y];
+      const side = chance(0.7) ? gaps.indexOf(Math.min(...gaps)) : Math.floor(rand(0, 4));
+      x = side === 0 ? b.x - 6 : side === 1 ? b.x + b.w + 6 : b.x + rand(0.1, 0.9) * b.w;
+      y = side === 2 ? b.y - 6 : side === 3 ? b.y + b.h + 6 : b.y + rand(0.1, 0.9) * b.h;
     } else {
-      // Crickets appear from under a panel edge near the aim.
-      const e = world.edges.length ? world.edges[Math.floor(Math.random() * world.edges.length)] : null;
-      x = e ? e.x1 + (e.x2 - e.x1) * Math.random() : aim.x;
-      y = e ? e.y1 + (e.y2 - e.y1) * Math.random() : aim.y;
+      // Crickets come out from a seam close to where they are headed.
+      let best: { x: number; y: number } | null = null, bd = Infinity;
+      for (let i = 0; i < 40 && world.edges.length; i++) {
+        const e = world.edges[Math.floor(Math.random() * world.edges.length)], u = Math.random();
+        const p = { x: e.x1 + (e.x2 - e.x1) * u, y: e.y1 + (e.y2 - e.y1) * u };
+        const d = Math.hypot(p.x - aim.x, p.y - aim.y);
+        if (d < bd && world.inBounds(p.x, p.y, 6)) { bd = d; best = p; }
+      }
+      x = best && bd < 120 ? best.x : aim.x;
+      y = best && bd < 120 ? best.y : aim.y;
     }
     const bug = new Bug(kind, x, y, aim);
     this.bugs.push(bug);
