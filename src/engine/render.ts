@@ -72,6 +72,8 @@ function disc(cx: number, cy: number, r: number, fn: (x: number, y: number, dx: 
  * half, while nearly end-on the shaded side thins away to nothing.
  */
 const SHADE_EDGE = 0.04;
+/** However end-on the light, the shade covers at least the flank's outer part as though it were this side-on. */
+const MIN_LIGHT = 0.15;
 /** How close to the edge of the shade a pixel keeps last frame's lit or shaded (see holdEdges). */
 const SHADE_HOLD = 0.05;
 /** How close to the outline, as a share of the radius either way, a pixel keeps last frame's on or off. */
@@ -140,6 +142,8 @@ export class GeckoRenderer {
    * forth across its back with every step), quickly when it really turns.
    */
   private light = 1;
+  /** Which flank is shaded when the light is nearly end-on (see paintBody). */
+  private shadeSide = 1;
   private bend = new Float32Array(SPINE);
   /**
    * Draw each leg from whole-pixel joints that only move once the real joint has clearly
@@ -489,10 +493,15 @@ export class GeckoRenderer {
       const a = b.z[Math.max(0, i - 2)], c = b.z[Math.min(SPINE - 1, i + 2)];
       bend[i] = b.z[i] - (a + c) / 2;
     }
+    // Facing almost straight along the light, both flanks are lit about the same and the
+    // shade would vanish, leaving it one flat colour: there's always at least a band of it
+    // down one side, the side the light last clearly fell away from.
+    if (Math.abs(this.light) > 0.12) this.shadeSide = Math.sign(this.light);
+    const light = this.shadeSide * Math.max(Math.abs(this.light), MIN_LIGHT);
     for (let y = 0; y < bh; y++) for (let x = 0; x < bw; x++) {
       const k = y * bw + x;
       if (depth[k] <= 0) continue;
-      const side = lat[k] * this.light, l = this.tiltA > 0 ? lerp(side, this.up[k] + 0.25, this.tiltA) : side;
+      const side = lat[k] * light, l = this.tiltA > 0 ? lerp(side, this.up[k] + 0.25, this.tiltA) : side;
       const v = l + SHADE_EDGE, key = (by + y) * 65536 + (bx + x);
       const lit = !this.holdEdges ? v > 0 : v > SHADE_HOLD ? true : v < -SHADE_HOLD ? false : this.wasLit.get(key) ?? v > 0, d = bend[seg[k]];
       on.add(key);

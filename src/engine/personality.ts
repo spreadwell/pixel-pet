@@ -1164,7 +1164,7 @@ const StateHandlers: Record<State, Handler> = {
           b.pushup = 1.4 * ease(0, 20) * (1 - ease(104, 16));
           let z = PRANK_RAISE * ease(0, 24);
           // ...held there, trembling...
-          if (sd.t >= 24 && sd.t < 70) z = PRANK_RAISE + Math.sin(sd.t * 0.9) * 0.6;
+          if (sd.t >= 24 && sd.t < 70) z = PRANK_RAISE + Math.sin((sd.t - 24) * 0.45) * 0.6;
           // ...and down it comes.
           if (sd.t >= 70) z = PRANK_RAISE * (1 - ease(70, 6));
           b.reach = { x: sd.at.x, y: sd.at.y, z, k: ease(0, 20) * (1 - ease(100, 18)) };
