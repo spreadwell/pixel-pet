@@ -72,8 +72,19 @@ function disc(cx: number, cy: number, r: number, fn: (x: number, y: number, dx: 
  * half, while nearly end-on the shaded side thins away to nothing.
  */
 const SHADE_EDGE = 0.04;
-/** Napping on a block: the radius of the curve the tail droops over the block's end on, art px. */
+/** Napping on a block: how quickly the tail turns down over the block's end (art px to turn most of the way). */
 const DROOP = 3;
+
+/** Where a point `s` art px along a drooping tail (past the edge) is, relative to the edge. */
+function droop(s: number) {
+  let dx = 0, dy = 0;
+  const step = 0.25;
+  for (let t = 0; t < s; t += step) {
+    const d = Math.min(step, s - t), a = (Math.PI / 2) * (1 - Math.exp(-(t + d / 2) / DROOP));
+    dx += Math.cos(a) * d; dy += Math.sin(a) * d;
+  }
+  return { dx, dy };
+}
 /** Side-on, how much thinner the tail gets towards its tip. */
 const TAIL_TAPER = 0.6;
 /** Side-on, how many pixels wide the top of the head's dome is. */
@@ -184,11 +195,11 @@ export class GeckoRenderer {
       if (tilt.end !== undefined && tilt.face) {
         const end = tilt.end * res, out = (end - px) * tilt.face;
         if (out > 0) {
-          // Round the corner on an arc, then hang straight down: a droop, not a fold.
-          const R = DROOP * res, arc = (R * Math.PI) / 2, a = this.tiltA;
-          const th = Math.min(out, arc) / R, rest = Math.max(0, out - arc);
-          const dx = R * Math.sin(th), dy = R * (1 - Math.cos(th)) + rest;
-          return { x: lerp(px, end - tilt.face * dx, a), y: sy + dy * a };
+          // Over the corner it droops: turning steadily further down the further it goes,
+          // one continuous curve rather than a run, a bend and a drop.
+          const { dx, dy } = droop(out / res);
+          const a = this.tiltA;
+          return { x: lerp(px, end - tilt.face * dx * res, a), y: sy + dy * res * a };
         }
       }
       return { x: px, y: sy };
@@ -215,6 +226,8 @@ export class GeckoRenderer {
       if (sx >= 0 && sy >= 0 && sx < sw && sy < sh) shadow[sy * sw + sx] = 1;
     };
     for (let i = 0; i < SPINE; i++) {
+      // Side-on, only the trunk lying on the edge casts a shadow there; what hangs doesn't.
+      if (this.tiltA > 0.6 && i > HIP) continue;
       const p = this.spinePoint(b, i);
       // Each part of the shadow lies on the surface it lands on, drawn lifted and scaled
       // with that surface: on a panel it rides up with the panel's floor and stays
@@ -228,7 +241,7 @@ export class GeckoRenderer {
       if (shadowRows < 0.999) { const sr = this.tiltA > 0.6 ? 0 : Math.round(rr * shadowRows); for (let dy = -sr; dy <= sr; dy++) for (let dx = -Math.round(rr); dx <= Math.round(rr); dx++) mark(Math.floor(q.x + dx), Math.floor(q.y + dy)); }
       else disc(q.x, q.y, rr, (x, y) => mark(x, y));
     }
-    for (const p of this.legPixels(b, pal, flat, this.snappedShadow, res)) {
+    if (this.tiltA <= 0.6) for (const p of this.legPixels(b, pal, flat, this.snappedShadow, res)) {
       const ax = (p.x + 0.5) / res, ay = (p.y + 0.5) / res;
       const o = this.tiltA > 0.6 ? 0 : castShadow(b, p.z, ax, ay);
       const q = project(ax + o, ay + o, b.ground(ax + o, ay + o));
@@ -368,6 +381,22 @@ export class GeckoRenderer {
         if (Math.abs(x + 0.5 - crown) > keep / 2) depth[k] = 0;
       }
       if (any) break;
+    }
+    // And a nose: a column two pixels tall in front of the tip of the snout, low down.
+    const s = Math.sign(Math.cos(b.headAngle)) || 1;
+    let front = -1;
+    for (let y = 0; y < bh; y++) for (let x = 0; x < bw; x++) {
+      const k = y * bw + x;
+      if (depth[k] > 0 && seg[k] <= 1 && (front < 0 || x * s > front * s)) front = x;
+    }
+    if (front < 0 || front + s < 0 || front + s >= bw) return;
+    let rows = 0;
+    for (let y = bh - 1; y >= 0 && rows < 2; y--) {
+      const k = y * bw + front;
+      if (depth[k] <= 0 || seg[k] > 1) continue;
+      const n = k + s;
+      this.depth[n] = depth[k] * 0.5; this.seg[n] = 0; this.lat[n] = this.lat[k]; this.up[n] = this.up[k];
+      rows++;
     }
   }
 
