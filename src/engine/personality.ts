@@ -35,8 +35,9 @@ import type { CoverEntry, World } from './world';
 //     margins and the gaps between paragraphs, around headings, climbing when it pays.
 //   - New: it notices what happens in Obsidian. A modal or the command palette opening
 //     freezes it, watching, until it closes; a notice popping up draws it over to pounce;
-//     something being dragged is prey to chase; a new note gets a look round. When you
-//     stop typing, it comes to sniff along the words you just wrote.
+//     something being dragged is prey to chase; a new note gets a look round. While you
+//     type it creeps closer, hesitantly, and lurks a little way off, watching; when you
+//     stop, it comes right up to sniff along the words you just wrote.
 //
 // Sections: TRAIT SYSTEM · NEEDS · SUB-BEHAVIOURS · STATE HANDLERS · PERSONALITY
 // Distances are multiples of S (the original's body scale, here in art px) and times
@@ -166,6 +167,7 @@ export const STATE = {
   HELD: 'held',
   WATCH: 'watch',
   INSPECT: 'inspect',
+  LURK: 'lurk',
 } as const;
 export type State = (typeof STATE)[keyof typeof STATE];
 
@@ -504,6 +506,45 @@ const StateHandlers: Record<State, Handler> = {
     },
   },
 
+  // You're typing: creep closer in hesitant shuffles and lurk a little way off, watching.
+  [STATE.LURK]: {
+    enter(g) { g.stateData = { spot: null, anchor: null, timer: 0, leaveAt: 1200 + Math.random() * 1500 }; },
+    update(g) {
+      const sd = g.stateData, head = g.head, w = g.c.world;
+      sd.timer++;
+      const k = w.caret ?? w.lastCaret;
+      // Stopped typing (the close look is fresh ink's job), or lost interest.
+      if (!k || !g.c.input.typedWithin(g.c.now, 4000) || sd.timer > sd.leaveAt) {
+        g.lurkCooldown = 1800 + Math.random() * 2400;
+        return { targetSpeed: 0.05 * S, transition: STATE.IDLE };
+      }
+      // Somewhere to watch from: re-chosen when the caret moves off, or comes too close.
+      const near = dist(head.x, head.y, k.x, k.y);
+      if (!sd.spot || dist(sd.anchor.x, sd.anchor.y, k.x, k.y) > 22 || near < 18) {
+        sd.spot = g.lurkSpot(k);
+        sd.anchor = { ...k };
+        g.planRoute(sd.spot.x, sd.spot.y);
+      }
+      const toCaret = Math.atan2(k.y - head.y, k.x - head.x);
+      const d = dist(head.x, head.y, sd.spot.x, sd.spot.y);
+      if (d > 4) {
+        // From afar it comes most of the way at a walk with the odd glance; close in it
+        // goes hesitantly, a little shuffle, then a pause to watch, then another.
+        const wp = g.waypoint(sd.spot.x, sd.spot.y);
+        g.targetAngle = Math.atan2(wp.y - head.y, wp.x - head.x);
+        const far = d > 40;
+        const beat = sd.timer % (far ? 90 : 70), go = far ? beat < 70 : beat < 30;
+        if (!go) g.headLook.lookAt(angleDiff(g.angle, toCaret));
+        return { targetSpeed: go ? (far ? g.speed * 0.8 : 0.45 * S) : 0 };
+      }
+      // In place: watch the caret, blinking, tasting the air now and then.
+      g.headLook.lookAt(angleDiff(g.angle, toCaret));
+      if (sd.timer % 150 === 60) g.blink();
+      if (sd.timer % 220 === 120) g.flick();
+      return { targetSpeed: 0 };
+    },
+  },
+
   // You stopped typing: come and sniff along the words you just wrote.
   [STATE.INSPECT]: {
     enter(g) {
@@ -733,6 +774,8 @@ export class Personality {
   watching: { x: number; y: number } | null = null;
   /** The end of what you just wrote, to come and sniff. */
   inkAt: { x: number; y: number } | null = null;
+  /** Ticks before it will come and lurk by your typing again. */
+  lurkCooldown = 0;
   /** How often a letter is stuck fast and takes a struggle to pull free. */
   stuckChance = 0.45;
   private route: Waypoint[] | null = null;
@@ -969,7 +1012,21 @@ export class Personality {
   }
 
   /** Is it calm enough to take an interest in something new? */
-  get calm() { const s = this.state; return s === STATE.IDLE || s === STATE.EXPLORE || s === STATE.BASKING; }
+  get calm() { const s = this.state; return s === STATE.IDLE || s === STATE.EXPLORE || s === STATE.BASKING || s === STATE.LURK; }
+
+  /** A place to lurk while you type: a little way from the caret, on its own side, off the words. */
+  lurkSpot(k: { x: number; y: number }) {
+    const w = this.c.world, h = this.head;
+    const side = Math.atan2(h.y - k.y, h.x - k.x);
+    let fallback: { x: number; y: number } | null = null;
+    for (let i = 0; i < 16; i++) {
+      const a = side + (Math.random() - 0.5) * 1.8, d = 26 + Math.random() * 14;
+      const q = w.clampToBounds(k.x + Math.cos(a) * d, k.y + Math.sin(a) * d, 8);
+      fallback ??= q;
+      if (!w.onText(q.x, q.y, 2)) return q;
+    }
+    return fallback!;
+  }
 
   /** A modal opened over the workspace (its centre, art px), or closed (null). */
   modalChanged(at: { x: number; y: number } | null) {
@@ -1197,6 +1254,13 @@ export class Personality {
     this.typing = c.input.typedWithin(c.now, 3500);
     // A notice goes away by itself after a few seconds; a drag lure is refreshed while it moves.
     if (this.lure && (--this.lureTicks <= 0 || (this.lureThere && !this.lureThere()))) { this.lure = null; this.lureThere = null; }
+    // You're typing: now and then it creeps over to lurk nearby and watch.
+    if (this.lurkCooldown > 0) this.lurkCooldown--;
+    const caret = c.world.caret;
+    if (this.state !== STATE.LURK && this.lurkCooldown <= 0 && this.calm && caret && this.typing && Math.random() < 0.008) {
+      const d = this.distTo(caret.x, caret.y);
+      if (d > 30 && d < 240) this.enterState(STATE.LURK);
+    }
     // You wrote something and stopped: come and have a look.
     if (this.calm && c.world.lastCaret && c.input.claimFreshInk(c.now)) {
       const k = c.world.lastCaret;
