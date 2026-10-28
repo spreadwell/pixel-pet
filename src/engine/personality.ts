@@ -801,113 +801,111 @@ const StateHandlers: Record<State, Handler> = {
     },
   },
 
-  // The graph view: its nodes are balls. Like a dog with a ball it stalks one, wiggles,
-  // pounces and knocks it flying (the graph pulls it back), sometimes trots off with it
-  // in its mouth and drops it, and goes again, until it tires of the game.
+  // The graph view: its nodes are balls, and it plays like a dog with one. It trots up,
+  // drops into a play bow — hips wiggling, tail going — and pounces: the ball goes flying
+  // and it's straight off after it. Sometimes it noses the ball along in front of it for a
+  // few steps before flicking it away. A ball that ends up behind it gets a wide loop
+  // round, not a spin on the spot. Played out, a few proud push-ups, and off it goes.
   [STATE.PLAY]: {
     enter(g) {
       const balls = g.c.graph?.balls() ?? [];
       let best: Ball | null = null;
       for (const b of balls) if (!best || g.distTo(b.x, b.y) < g.distTo(best.x, best.y)) best = b;
-      g.stateData = { id: best?.id, phase: 'stalk', t: 0, rounds: 3 + Math.floor(Math.random() * 4), carried: false };
+      g.stateData = { id: best?.id, phase: 'approach', t: 0, rounds: 4 + Math.floor(Math.random() * 4) };
     },
     update(g) {
       const sd = g.stateData, pg = g.c.graph, head = g.head, b = g.body;
+      if (sd.phase === 'proud') {
+        // Played out: a few push-ups, pleased with itself.
+        sd.t++;
+        b.pushup = 2.4 * Math.max(0, Math.sin((sd.t / 30) * Math.PI)) * (sd.t < 90 ? 1 : 0);
+        if (sd.t > 110) { b.pushup = 0; g.playCooldown = 2400 + Math.random() * 2400; return { targetSpeed: 0, transition: STATE.IDLE }; }
+        return { targetSpeed: 0 };
+      }
       const ball = pg?.balls().find((x) => x.id === sd.id);
       if (!pg || !ball) return { targetSpeed: 0, transition: STATE.IDLE };
       const s = g.snout(), gap = dist(s.x, s.y, ball.x, ball.y) - ball.r;
-      const toBall = Math.atan2(ball.y - head.y, ball.x - head.x);
+      const toBall = Math.atan2(ball.y - head.y, ball.x - head.x), off = Math.abs(angleDiff(g.angle, toBall));
       sd.t++;
+      // Run at the ball — or, if it's off behind it, loop wide round to come at it again.
+      const runAt = (speed: number) => {
+        if (off > 1.6 && gap < 40) {
+          const side = Math.sign(angleDiff(g.angle, toBall)) || 1;
+          g.targetAngle = g.angle + side * 0.5;
+        } else g.targetAngle = toBall;
+        return { targetSpeed: speed };
+      };
+      const kick = (k: number, a: number, next: string) => {
+        sd.from = { x: ball.x, y: ball.y };
+        sd.to = g.c.world.clampToBounds(ball.x + Math.cos(a) * k, ball.y + Math.sin(a) * k, 10);
+        sd.phase = 'kick'; sd.t = 0; sd.next = next;
+        g.flick();
+      };
       switch (sd.phase) {
-        case 'stalk': {
-          if (sd.rounds <= 0) { g.playCooldown = 2400 + Math.random() * 2400; return { targetSpeed: 0, transition: STATE.IDLE }; }
-          if (gap < 14) {
-            if (Math.abs(angleDiff(g.angle, toBall)) < 0.5) { sd.phase = 'ready'; sd.t = 0; sd.readyFor = 25 + Math.random() * 30; return { targetSpeed: 0 }; }
-            // Right by it but facing the wrong way: it can't turn on the spot, so it carries
-            // on past, curving round the ball's side, and comes back at it.
-            const side = Math.sign(angleDiff(g.angle, toBall)) || 1, a = g.angle + side * 0.9;
-            sd.spot = g.c.world.clampToBounds(head.x + Math.cos(a) * 30, head.y + Math.sin(a) * 30, 10);
-            sd.phase = 'back'; sd.t = 0;
-          }
-          const wp = g.waypoint(ball.x, ball.y);
-          g.targetAngle = Math.atan2(wp.y - head.y, wp.x - head.x);
-          if (sd.t > 900) sd.rounds = 0;
-          return { targetSpeed: g.speed * (gap > 50 ? 1.4 : 0.8) };
-        }
-        case 'ready':
+        case 'approach':
+          if (sd.rounds <= 0) { sd.phase = 'proud'; sd.t = 0; return { targetSpeed: 0 }; }
+          if (gap < 18 && off < 0.5) { sd.phase = 'bow'; sd.t = 0; sd.bowFor = 18 + Math.random() * 22; return { targetSpeed: 0 }; }
+          if (sd.t > 600) sd.rounds = 0;
+          return runAt(g.speed * (gap > 40 ? 1.5 : 0.9));
+        case 'bow':
           // The play bow: frozen on it, hips wiggling, tail going.
           g.targetAngle = toBall;
           b.wiggle = 1;
-          if (sd.t > sd.readyFor) {
+          if (sd.t > sd.bowFor) {
             b.wiggle = 0;
             sd.phase = 'pounce'; sd.t = 0;
             g.currentSpeed = g.c.opts.reducedMotion ? g.speed : g.speed * 3;
           }
           return { targetSpeed: 0 };
         case 'pounce':
-          g.targetAngle = toBall;
-          b.mouthTarget = 0.7;
-          if (gap < 1.5) {
+          if (gap < 2) {
             sd.rounds--;
-            g.flick();
-            if (!sd.carried && Math.random() < 0.35) {
-              // Got it: off it trots with the ball in its mouth.
-              sd.carried = true;
-              const a = g.angle + (Math.random() - 0.5) * 2;
-              sd.to = g.c.world.clampToBounds(head.x + Math.cos(a) * (40 + Math.random() * 40), head.y + Math.sin(a) * (40 + Math.random() * 40), 20);
-              sd.spot = sd.to;
-              sd.phase = 'carry'; sd.t = 0;
-              g.planRoute(sd.to.x, sd.to.y);
-              return { targetSpeed: g.speed };
-            }
-            // A swipe of the head: the ball goes flying the way it was going.
-            const k = 22 + Math.random() * 20, a = b.headAngle + (Math.random() - 0.5) * 0.6;
-            sd.from = { x: ball.x, y: ball.y };
-            sd.to = { x: ball.x + Math.cos(a) * k, y: ball.y + Math.sin(a) * k };
-            sd.phase = 'kick'; sd.t = 0;
-            return { targetSpeed: g.speed * 0.5 };
+            // Sometimes it noses the ball along; mostly it knocks it flying.
+            if (Math.random() < 0.25) { sd.phase = 'dribble'; sd.t = 0; sd.dribbleFor = 60 + Math.random() * 60; sd.wander = (Math.random() - 0.5) * 0.02; return { targetSpeed: g.speed }; }
+            kick(30 + Math.random() * 25, b.headAngle + (Math.random() - 0.5) * 0.7, 'chase');
+            return { targetSpeed: g.speed * 0.8 };
           }
-          if (sd.t > 70) { sd.phase = 'stalk'; sd.t = 0; }
-          return { targetSpeed: g.c.opts.reducedMotion ? g.speed : g.speed * 3 };
+          if (sd.t > 60) { sd.phase = 'approach'; sd.t = 0; }
+          return runAt(g.c.opts.reducedMotion ? g.speed : g.speed * 3);
         case 'kick': {
-          const u = smoothstep(Math.min(1, sd.t / 10));
+          // The ball flies off, easing out; it's already running after it.
+          const u = 1 - (1 - Math.min(1, sd.t / 14)) ** 2;
           pg.push(sd.id, lerp(sd.from.x, sd.to.x, u), lerp(sd.from.y, sd.to.y, u));
-          if (sd.t >= 12) { pg.letGo(sd.id); sd.phase = 'watch'; sd.t = 0; sd.watchFor = 20 + Math.random() * 30; }
-          return { targetSpeed: 0 };
-        }
-        case 'carry': {
-          b.mouthTarget = 0.45;
-          const f = b.headAngle;
-          pg.push(sd.id, s.x + Math.cos(f) * ball.r * 0.6, s.y + Math.sin(f) * ball.r * 0.6);
-          if (g.arrived(sd) || sd.t > 240) {
-            pg.letGo(sd.id);
-            sd.phase = 'watch'; sd.t = 0; sd.watchFor = 40 + Math.random() * 40;
-            g.flick();
-            return { targetSpeed: 0 };
-          }
-          const wp = g.waypoint(sd.to.x, sd.to.y);
-          g.targetAngle = Math.atan2(wp.y - head.y, wp.x - head.x);
-          return { targetSpeed: g.speed * 1.2 };
-        }
-        case 'back': {
-          if (g.arrived(sd) || sd.t > 120) { sd.phase = 'stalk'; sd.t = 0; return { targetSpeed: g.speed * 0.6 }; }
-          g.targetAngle = Math.atan2(sd.spot.y - head.y, sd.spot.x - head.x);
-          return { targetSpeed: g.speed };
-        }
-        default:
-          // Watching where it went, tail going, then after it again.
+          if (sd.t >= 14) { pg.letGo(sd.id); sd.phase = sd.next; sd.t = 0; }
           g.headLook.lookAt(angleDiff(g.angle, toBall));
-          if (sd.t > sd.watchFor) { sd.phase = 'stalk'; sd.t = 0; }
-          return { targetSpeed: 0 };
+          return { targetSpeed: g.speed * (0.8 + Math.min(1, sd.t / 14)) };
+        }
+        case 'chase':
+          // Straight after it; caught up, it bows again for another go, or noses it along.
+          if (gap < 12) {
+            if (sd.rounds <= 0) { sd.phase = 'proud'; sd.t = 0; return { targetSpeed: 0 }; }
+            if (off < 0.5 && Math.random() < 0.25) { sd.rounds--; sd.phase = 'dribble'; sd.t = 0; sd.dribbleFor = 50 + Math.random() * 50; sd.wander = (Math.random() - 0.5) * 0.02; return { targetSpeed: g.speed }; }
+            sd.phase = 'approach'; sd.t = 0;
+          }
+          if (sd.t > 400) { sd.phase = 'approach'; sd.t = 0; }
+          return runAt(g.speed * 1.8);
+        case 'dribble': {
+          // Nosing it along, a little weave to the trot, the ball just ahead of its snout.
+          g.targetAngle = g.angle + sd.wander + Math.sin(sd.t * 0.08) * 0.02;
+          const f = b.headAngle;
+          pg.push(sd.id, s.x + Math.cos(f) * (ball.r + 1), s.y + Math.sin(f) * (ball.r + 1));
+          if (sd.t > sd.dribbleFor || !g.c.world.inBounds(head.x + Math.cos(g.angle) * 20, head.y + Math.sin(g.angle) * 20, 10)) {
+            // ...and a flick of the head sends it off.
+            pg.letGo(sd.id);
+            kick(20 + Math.random() * 15, f + (Math.random() - 0.5) * 1.2, 'chase');
+          }
+          return { targetSpeed: g.speed * 0.9 };
+        }
       }
+      return { targetSpeed: 0 };
     },
   },
 
   // A nap on a code block or callout. It walks in along the top of the block's front
-  // edge; then, as it settles, the view turns over to nearly side-on — the same body, in
-  // 3-D — so it's seen lying along the top of the block, belly down, chin resting, its
-  // tail turning off over the edge and hanging down the front. Its eyes close; Z's. A
-  // pointer moving close by wakes it: eyes open, the view turns back, and it's off.
+  // edge from just past its end; then, as it settles, the view turns over to nearly
+  // side-on — the same body, in 3-D — and it lies down along the top, an arm and a leg
+  // slipping over the edge, the tail drooping over the end, eyes closing; Z's. A pointer
+  // moving close by wakes it, and it steps out of the pose and walks off.
   [STATE.NAP]: {
     enter(g) {
       const r = g.napRock!, h = g.head;
@@ -2009,10 +2007,10 @@ export class Personality {
     b.breathDepth = sleeping ? 0.085 : 0.05;
     b.tailTwitch = this.state === STATE.HUNT && this.stateData.phase === 'ready' ? 1 : this.state === STATE.PLAY ? 0.8 : this.state === STATE.HELD ? 0.8 : this.state === STATE.LURK && (this.stateData.frozen || this.stateData.phase === 'wary') ? 0.5 : this.state === STATE.NIBBLE && this.stateData.phase === 'grab' && this.stateData.stuck ? 0.6 : this.state === STATE.HUNT ? 0.7 : this.state === STATE.STARTLE ? 0.35 : 0;
     if (this.mouthTicks > 0) { this.mouthTicks--; b.mouthTarget = this.mouthTicks > 4 ? 1 : 0.4; }
-    else if (this.state !== STATE.NIBBLE && this.state !== STATE.HUNT && this.state !== STATE.FEAST && this.state !== STATE.PLAY) b.mouthTarget = 0;
+    else if (this.state !== STATE.NIBBLE && this.state !== STATE.HUNT && this.state !== STATE.FEAST) b.mouthTarget = 0;
     if (this.state !== STATE.HUNT && this.state !== STATE.PLAY) b.wiggle = 0;
     if (this.state !== STATE.FEAST) b.gulp = -1;
-    if (this.state !== STATE.IDLE && this.state !== STATE.BASKING) { this.display = null; if (this.state !== STATE.NAP) b.pushup = 0; }
+    if (this.state !== STATE.IDLE && this.state !== STATE.BASKING) { this.display = null; if (this.state !== STATE.NAP && this.state !== STATE.PLAY) b.pushup = 0; }
 
     const slow = clamp(1 - this.currentSpeed / (this.speed || 1), 0, 1);
     return {
