@@ -30,6 +30,8 @@ export interface PetOptions extends BrainOptions {
   pranks?: Pranks;
   /** Something worth putting in its diary happened. */
   onDiary?: (kind: DiaryKind, text: string) => void;
+  /** Double-tapped on a touch screen: show its menu here (CSS px). */
+  onMenu?: (x: number, y: number) => void;
 }
 
 /** The personality is tuned per 60 Hz tick, so the whole simulation runs on a fixed step. */
@@ -78,8 +80,8 @@ export class PetEngine {
     this.world = new World(win);
     this.input = new InputTracker(win);
     this.grabber = new Grabber(win, {
-      hit: (x, y) => this.hits(x, y),
-      start: (x, y) => { this.body.grab(x / this.opts.px, y / this.opts.px); this.brain.pickUp(); },
+      hit: (x, y, finger) => this.hits(x, y, finger),
+      start: (x, y) => { this.body.grab(x / this.opts.px, y / this.opts.px); this.brain.pickUp(); this.buzz(12); },
       move: (x, y) => this.body.holdAt(x / this.opts.px, y / this.opts.px),
       end: () => { this.splash(); this.body.release(); this.brain.putDown(); },
     });
@@ -408,11 +410,17 @@ export class PetEngine {
   private emoteFrom: { x: number; y: number } | null = null;
 
   /** Is (x, y), CSS px, on the pet? */
-  hits(x: number, y: number) {
+  hits(x: number, y: number, finger = false) {
     if (!this.brain) return false;
     const ax = x / this.opts.px, ay = y / this.opts.px;
     if (this.body.under && this.world.coverAt(ax, ay)) return false;
-    return this.brain.bodyDistance(ax, ay) < 1.5;
+    // A fingertip is broad and the gecko small: it gets about 10 CSS px of grace.
+    return this.brain.bodyDistance(ax, ay) < 1.5 + (finger ? 10 / this.opts.px : 0);
+  }
+
+  /** A tiny vibration, on phones that can (touch only). */
+  private buzz(ms: number) {
+    if (this.input.touch) (this.win.navigator as Navigator & { vibrate?: (ms: number) => boolean }).vibrate?.(ms);
   }
 
   /** Advance the simulation without waiting for animation frames (testing, previews). */
@@ -464,6 +472,17 @@ export class PetEngine {
     const now = performance.now();
     const c = this.c;
     c.now = now;
+    // Ride the page as it scrolls, even where scroll events come late (see Happenings.poll).
+    this.happenings.poll();
+    // A double tap on it is for its menu, not a poke.
+    const presses = this.input.presses;
+    for (let i = presses.length - 1; i >= 0; i--) {
+      const p = presses[i];
+      if (!p.double) continue;
+      presses.splice(i, 1);
+      if (this.hits(p.x, p.y, true)) this.opts.onMenu?.(p.x, p.y);
+    }
+    const petted = this.brain.petted;
 
     this.scanIn -= TICK;
     if (this.scanIn <= 0) { this.world.scan(); this.scanIn = 0.5; }
@@ -478,6 +497,7 @@ export class PetEngine {
     c.pal = this.pal;
 
     const drive = this.brain.update();
+    if (this.brain.petted && !petted) this.buzz(6);
     this.body.update(TICK, drive);
     // Once it is all the way out from under a panel, it is back on top of things.
     if (this.body.under && this.brain.state !== STATE.HIDE && !this.body.pts.some((p) => this.world.coverAt(p.x, p.y))) this.body.under = false;

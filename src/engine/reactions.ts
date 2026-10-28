@@ -31,7 +31,8 @@ interface Glyph { ch: string; font: string; color: string; }
 interface Letter {
   range: Range; node: Text; offset: number;
   ch: string; font: string; color: string;
-  x: number; baseline: number;
+  /** From the top of the letter's box to its baseline. Where the box is, is read from the range as it's drawn, so the copy goes with the page when it scrolls. */
+  ascent: number;
   t: number; strength: number;
 }
 
@@ -51,6 +52,8 @@ export class Reactions {
     x: number; y: number; angle: number; left: number; drop: number;
     /** Where it came from, how far it has come out (0 in its slot, 1 in the jaws), and the strain on it. */
     sx: number; sy: number; pull: number; tension: number; stuck: boolean;
+    /** The letter's place in the note, so where it came from follows the page as it scrolls. */
+    range: Range;
   }) | null = null;
 
   constructor(private win: Window) {
@@ -121,7 +124,7 @@ export class Reactions {
     this.carried = {
       ch, font: `${cs.fontStyle} ${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`, color: cs.color,
       x: r.left + r.width / 2, y: r.top + r.height / 2, angle: 0, left: 1, drop: 0,
-      sx: r.left + r.width / 2, sy: r.top + r.height / 2, pull: 0, tension: 0, stuck,
+      sx: r.left + r.width / 2, sy: r.top + r.height / 2, pull: 0, tension: 0, stuck, range,
     };
     this.dirty = true;
   }
@@ -184,10 +187,13 @@ export class Reactions {
     }
     g.globalAlpha = 1;
     for (const l of this.letters) {
+      // Where the letter is now, scrolled or not.
+      const box = l.range.getBoundingClientRect();
+      if (box.width < 1) continue;
       // Pressed straight down into the page a touch, slightly flattened, then settling.
       const press = Math.min(1.3, l.strength) * Math.exp(-11 * l.t) * Math.sin(Math.min(1, l.t / 0.06) * Math.PI / 2);
       g.setTransform(dpr, 0, 0, dpr, 0, 0);
-      g.translate(l.x, l.baseline + press * 1.1);
+      g.translate(box.left, box.top + l.ascent + press * 1.1);
       g.scale(1 + press * 0.04, 1 - press * 0.07);
       g.font = l.font;
       g.fillStyle = l.color;
@@ -197,6 +203,11 @@ export class Reactions {
     t.setTransform(1, 0, 0, 1, 0, 0);
     t.clearRect(0, 0, this.top.width, this.top.height);
     const c = this.carried;
+    if (c && (c.stuck || c.pull < 1)) {
+      // Still in, or coming out of, its slot: the slot is wherever the page has scrolled it.
+      const r = c.range.getBoundingClientRect();
+      if (r.width > 0) { c.sx = r.left + r.width / 2; c.sy = r.top + r.height / 2; }
+    }
     if (c) {
       const g = t;
       g.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -256,7 +267,7 @@ export class Reactions {
     const box = hit.getBoundingClientRect();
     this.letters.push({
       range: hit, node, offset, ch: text[offset], font, color: cs.color,
-      x: box.left, baseline: box.top + (m.fontBoundingBoxAscent || box.height * 0.8),
+      ascent: m.fontBoundingBoxAscent || box.height * 0.8,
       t: 0, strength,
     });
     this.highlight.add(hit);

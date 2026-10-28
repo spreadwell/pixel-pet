@@ -9,7 +9,7 @@ export const PANEL_VIEW = 'pixel-pet-panel';
 
 /** A pixel icon to go with what it's doing. */
 const STATE_ICONS: Record<string, string> = {
-  idle: 'paw', basking: 'sun', explore: 'look', scout: 'look', hunt: 'fly', feast: 'fly',
+  idle: 'paw', basking: 'sun', explore: 'look', scout: 'look', hunt: 'bug', feast: 'bug',
   startle: 'bang', flee: 'bang', sleep: 'moon', nap: 'moon', nibble: 'letter', held: 'hand',
   watch: 'paw', inspect: 'letter', lurk: 'paw', curious: 'paw', retreat: 'look', play: 'ball',
   prank: 'flame', hide: 'paw', away: 'paw',
@@ -17,7 +17,7 @@ const STATE_ICONS: Record<string, string> = {
 
 /** And one for each kind of diary entry. */
 const DIARY_ICONS: Record<DiaryKind, string> = {
-  catch: 'fly', letter: 'letter', nap: 'moon', sleep: 'moon', play: 'ball', prank: 'flame', snack: 'fly',
+  catch: 'bug', letter: 'letter', nap: 'moon', sleep: 'moon', play: 'ball', prank: 'flame', snack: 'bug',
   explore: 'look', retreat: 'look', petted: 'heart', held: 'hand', startle: 'bang', pushups: 'up', bask: 'sun',
 };
 

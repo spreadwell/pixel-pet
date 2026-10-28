@@ -6,8 +6,8 @@
  * All coordinates are CSS pixels.
  */
 export interface GrabHandlers {
-  /** Is (x, y) on the pet? */
-  hit(x: number, y: number): boolean;
+  /** Is (x, y) on the pet? (A finger gets a more forgiving hit than a mouse.) */
+  hit(x: number, y: number, finger?: boolean): boolean;
   start(x: number, y: number): void;
   move(x: number, y: number): void;
   end(x: number, y: number): void;
@@ -32,7 +32,7 @@ export class Grabber {
     const claim = (e: Event) => { e.preventDefault(); e.stopPropagation(); };
 
     on('pointerdown', (e) => {
-      if (this.press || (e.pointerType === 'mouse' && e.button !== 0) || !this.h.hit(e.clientX, e.clientY)) return;
+      if (this.press || (e.pointerType === 'mouse' && e.button !== 0) || !this.h.hit(e.clientX, e.clientY, e.pointerType === 'touch')) return;
       this.press = { id: e.pointerId, x: e.clientX, y: e.clientY, carrying: false };
       claim(e);
     });
@@ -66,7 +66,7 @@ export class Grabber {
     on('pointerup', finish);
     on('pointercancel', finish);
     // On touch screens, a finger that starts on the pet must not scroll the note.
-    on('touchstart', (e) => { const t = e.touches[0]; if (t && this.h.hit(t.clientX, t.clientY)) e.preventDefault(); });
+    on('touchstart', (e) => { const t = e.touches[0]; if (t && this.h.hit(t.clientX, t.clientY, true)) e.preventDefault(); });
     on('touchmove', (e) => { if (this.press?.carrying) e.preventDefault(); });
   }
 

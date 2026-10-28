@@ -7,11 +7,14 @@
  * point for a few seconds — that the gecko can come over and investigate. A tap is
  * reported as a press only when the finger lifts, so press-and-hold never startles.
  */
-export interface Press { x: number; y: number; tap: boolean; }
+export interface Press { x: number; y: number; tap: boolean; /** The second tap of a double tap. */ double?: boolean; }
 
 const LURE_MS = 7000;
 const TAP_MS = 280;
 const TAP_SLOP = 12;
+/** Two taps within this long (and this far apart) are a double tap. */
+const DOUBLE_MS = 320;
+const DOUBLE_SLOP = 30;
 
 export class InputTracker {
   pointer: { x: number; y: number } | null = null;
@@ -31,6 +34,8 @@ export class InputTracker {
   private fingerDown = false;
   private down = { x: 0, y: 0, t: 0 };
   private lureUntil = 0;
+  /** A tap held back a moment, in case it's the first of a double tap. */
+  private pendingTap: { x: number; y: number; t: number; timer: number } | null = null;
   private off: (() => void)[] = [];
 
   constructor(private win: Window) {}
@@ -65,7 +70,18 @@ export class InputTracker {
       this.fingerDown = false;
       const moved = Math.hypot(e.clientX - this.down.x, e.clientY - this.down.y);
       if (!cancelled && now - this.down.t < TAP_MS && moved < TAP_SLOP) {
-        this.presses.push({ x: e.clientX, y: e.clientY, tap: true });
+        // A tap counts once it's clear it isn't the first of two; a second one close by
+        // makes a double tap instead.
+        const first = this.pendingTap;
+        if (first && now - first.t < DOUBLE_MS && Math.hypot(e.clientX - first.x, e.clientY - first.y) < DOUBLE_SLOP) {
+          this.win.clearTimeout(first.timer);
+          this.pendingTap = null;
+          this.presses.push({ x: e.clientX, y: e.clientY, tap: true, double: true });
+        } else {
+          if (first) { this.win.clearTimeout(first.timer); this.presses.push({ x: first.x, y: first.y, tap: true }); }
+          const x = e.clientX, y = e.clientY;
+          this.pendingTap = { x, y, t: now, timer: this.win.setTimeout(() => { this.pendingTap = null; this.presses.push({ x, y, tap: true }); }, DOUBLE_MS) };
+        }
         this.pointer = { x: e.clientX, y: e.clientY };
         this.vx = this.vy = 0;
         this.lureUntil = now + LURE_MS;
@@ -106,6 +122,8 @@ export class InputTracker {
   detach() {
     for (const f of this.off) f();
     this.off = [];
+    if (this.pendingTap) this.win.clearTimeout(this.pendingTap.timer);
+    this.pendingTap = null;
   }
 
   /** The pointer as the gecko perceives it: a lifted finger only lingers as a lure. */

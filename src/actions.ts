@@ -17,7 +17,7 @@ export const ACTIONS: Action[] = [
   { cmd: 'come', label: 'Come here', icon: 'hand', pixel: 'hand' },
   { cmd: 'explore', label: 'Explore', icon: 'compass', pixel: 'look' },
   { cmd: 'sleep', label: 'Sleep', icon: 'moon', pixel: 'moon', asleep: { cmd: 'wake', label: 'Wake up', icon: 'alarm-clock', pixel: 'sun' } },
-  { cmd: 'eat', label: 'Something to eat', icon: 'bug', pixel: 'fly' },
+  { cmd: 'eat', label: 'Something to eat', icon: 'bug', pixel: 'bug' },
   { cmd: 'nibble', label: 'Steal a letter', icon: 'type', pixel: 'letter' },
   { cmd: 'play', label: 'Play ball', icon: 'git-fork', pixel: 'ball' },
   { cmd: 'pushups', label: 'Push-ups', icon: 'dumbbell', pixel: 'up' },
@@ -32,10 +32,11 @@ export const current = (a: Action, engine: PetEngine | null): Omit<Action, 'asle
 const BREAK_AFTER = new Set(['sleep', 'nibble', 'bask']);
 
 /**
- * The pet's own menu, for a right-click on it: everything you can ask it to do (dimmed if
- * it can't just now), its diary, and its settings.
+ * The pet's own menu, for a right-click on it (or a double tap, on a touch screen) at
+ * `at`, CSS px: everything you can ask it to do (dimmed if it can't just now), its panel,
+ * and its settings.
  */
-export function showPetMenu(e: MouseEvent, engine: PetEngine, extra: { diary(): void; settings(): void }) {
+export function showPetMenu(at: { x: number; y: number }, engine: PetEngine, extra: { diary(): void; settings(): void }) {
   const menu = new Menu();
   for (const a of ACTIONS) {
     const f = current(a, engine), why = engine.unavailable(f.cmd);
@@ -49,5 +50,5 @@ export function showPetMenu(e: MouseEvent, engine: PetEngine, extra: { diary(): 
   menu.addSeparator();
   menu.addItem((item) => item.setTitle('Open pet panel').setIcon('paw-print').onClick(extra.diary));
   menu.addItem((item) => item.setTitle('Settings').setIcon('settings').onClick(extra.settings));
-  menu.showAtMouseEvent(e);
+  menu.showAtPosition(at);
 }

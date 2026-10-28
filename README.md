@@ -30,7 +30,7 @@ Now and then it tastes a word with its tongue, plucks a letter out of it and scu
 
 Right-click the pet for its menu: ask it to come over, explore, sleep or wake up, have something to eat, steal a letter, play ball in the graph, do push-ups, bask, or cause some mischief (whether or not Mischievous is on). Show or hide it from the ribbon (paw icon) or the command palette, which also has **Call the pet over**, **Release a bug** and **Open pet panel**. The panel, drawn in the pet's own pixel style, shows what it's doing now, a short diary of what it's been up to (caught a fly, napped on a code block in *Recipes*, stole the letter “e”), and the same commands as buttons. One that can't do anything just now is dimmed and says why.
 
-Works on desktop and mobile. On touch screens, tap near it to get its attention, hold a finger on it to pet it, and tap it directly to make it dart away.
+Works on desktop and mobile. On touch screens, tap near it to get its attention, hold a finger on it or stroke it to pet it, press and drag to carry it, tap it to make it dart away, and double-tap it for its menu. It rides the page as you scroll, flings and all.
 
 ## Development
 

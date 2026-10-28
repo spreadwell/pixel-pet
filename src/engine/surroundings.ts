@@ -150,9 +150,29 @@ export interface HappeningHandlers {
 export class Happenings {
   private off: (() => void)[] = [];
   private scrollPos = new WeakMap<Element, [number, number]>();
+  /** Scrollers seen, checked every frame too (see poll). */
+  private scrollers = new Set<Element>();
   private modalOpen = false;
 
   constructor(private win: Window, private h: HappeningHandlers) {}
+
+  /** Has `el` scrolled since last seen? Report it. */
+  private check(el: Element) {
+    const prev = this.scrollPos.get(el), now: [number, number] = [el.scrollLeft, el.scrollTop];
+    this.scrollPos.set(el, now);
+    if (prev && (prev[0] !== now[0] || prev[1] !== now[1])) this.h.scroll(el.getBoundingClientRect(), now[0] - prev[0], now[1] - prev[1]);
+  }
+
+  /**
+   * Every frame: the scrollers seen, checked for movement. Scroll events can come late or
+   * in bursts — a fling on a phone, say — and the gecko should ride the page frame by frame.
+   */
+  poll() {
+    for (const el of this.scrollers) {
+      if (!el.isConnected) { this.scrollers.delete(el); continue; }
+      this.check(el);
+    }
+  }
 
   attach() {
     const doc = this.win.document;
@@ -192,16 +212,22 @@ export class Happenings {
     on('scroll', (e) => {
       const el = e.target as Element | null;
       if (!el || el.nodeType !== Node.ELEMENT_NODE) return;
-      const prev = this.scrollPos.get(el), now: [number, number] = [el.scrollLeft, el.scrollTop];
-      this.scrollPos.set(el, now);
-      if (prev && (prev[0] !== now[0] || prev[1] !== now[1])) this.h.scroll(el.getBoundingClientRect(), now[0] - prev[0], now[1] - prev[1]);
+      this.scrollers.add(el);
+      this.check(el);
     });
-    // Remember where scrollers start, so the first scroll has something to compare with.
-    on('wheel', (e) => {
+    // Remember where scrollers start, so the first scroll has something to compare with: a
+    // wheel turned over one, or a finger put down on it (touch has no wheel).
+    const prime = (e: Event) => {
       for (let el = e.target as Element | null; el; el = el.parentElement) {
-        if (el.scrollHeight > el.clientHeight && !this.scrollPos.has(el)) this.scrollPos.set(el, [el.scrollLeft, el.scrollTop]);
+        if (el.scrollHeight > el.clientHeight || el.scrollWidth > el.clientWidth) {
+          if (!this.scrollPos.has(el)) this.scrollPos.set(el, [el.scrollLeft, el.scrollTop]);
+          this.scrollers.add(el);
+        }
       }
-    });
+    };
+    on('wheel', prime);
+    on('pointerdown', prime);
+    on('touchstart', prime);
   }
 
   detach() { for (const f of this.off) f(); this.off = []; }

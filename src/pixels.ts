@@ -1,18 +1,19 @@
 /*
- * Tiny pixel-art icons for the pet panel, so it looks like it belongs to the pet: 8×8
- * bitmaps drawn as crisp squares in the current text color.
+ * Tiny pixel-art icons for the pet panel, so it looks like it belongs to the pet: little
+ * bitmaps (mostly 8×8) drawn as crisp squares in the current text color.
  */
 
 const ICONS: Record<string, string[]> = {
-  fly: [
-    '.#....#.',
-    '#.#..#.#',
-    '.#.##.#.',
-    '...##...',
-    '..####..',
-    '..####..',
-    '...##...',
-    '........',
+  bug: [
+    '..#...#..',
+    '...#.#...',
+    '..#####..',
+    '#.#####.#',
+    '.###.###.',
+    '.###.###.',
+    '#.##.##.#',
+    '..##.##..',
+    '.#.....#.',
   ],
   cricket: [
     '#.......',
@@ -142,7 +143,9 @@ export function pixelIcon(parent: HTMLElement, name: string, size = 16) {
   const rows = ICONS[name] ?? ICONS.paw;
   const ns = 'http://www.w3.org/2000/svg';
   const svg = document.createElementNS(ns, 'svg');
-  svg.setAttribute('viewBox', '0 0 8 8');
+  // Square, whatever the bitmap's size, so every icon sits the same in a row.
+  const n = Math.max(rows.length, ...rows.map((r) => r.length));
+  svg.setAttribute('viewBox', `0 0 ${n} ${n}`);
   svg.setAttribute('width', String(size));
   svg.setAttribute('height', String(size));
   svg.setAttribute('shape-rendering', 'crispEdges');

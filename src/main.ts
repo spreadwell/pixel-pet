@@ -45,7 +45,7 @@ export default class PixelPetPlugin extends Plugin {
       if (!this.engine?.hits(e.clientX, e.clientY)) return;
       e.preventDefault();
       e.stopPropagation();
-      showPetMenu(e, this.engine, { diary: () => void this.openPanel(), settings: () => this.openSettings() });
+      showPetMenu({ x: e.clientX, y: e.clientY }, this.engine, this.menuExtras);
     }, { capture: true });
     this.addCommand({ id: 'open-panel', name: 'Open pet panel', callback: () => this.openPanel() });
 
@@ -73,6 +73,8 @@ export default class PixelPetPlugin extends Plugin {
       await this.saveData(this.settings);
     }
   }
+
+  private menuExtras = { diary: () => void this.openPanel(), settings: () => this.openSettings() };
 
   /** Pixel Pet's settings. */
   openSettings() {
@@ -117,6 +119,7 @@ export default class PixelPetPlugin extends Plugin {
       graph: this.graph,
       pranks: this.pranks,
       onDiary: (kind, text) => this.noteDiary(kind, text),
+      onMenu: (x, y) => { if (this.engine) showPetMenu({ x, y }, this.engine, this.menuExtras); },
     };
   }
 
