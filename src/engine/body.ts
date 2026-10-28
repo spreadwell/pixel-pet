@@ -92,8 +92,6 @@ const STRIDE_MAX = 8;
 const COMFORT = 0.9;
 /** Curled up asleep: how much each joint of the trunk and of the tail bends (radians). */
 const CURL_TRUNK = 0.14, CURL_TAIL = 0.2;
-/** Draped over a ledge: how much each joint at the middle of the tail turns its back half over. */
-const CURL_DRAPE = 0.3;
 const MAX_STEP_HZ = 8;
 /** Steepest the body drapes over a step: height change per art px of spine. */
 const DRAPE_SLOPE = 0.8;
@@ -402,8 +400,8 @@ export class Body {
       d = clamp(d, -maxB, maxB);
       // Curling up to sleep, every joint behind the neck bends the same way — the trunk a
       // little, the tail more — until the body lies in a C with the head by its tail tip.
-      // Draped, the trunk lies straight and only the tail turns, off to the side.
-      if (this.curl > 0) d = lerp(d, this.curlDir * (this.curlStyle === 'coil' ? (i <= HIP ? CURL_TRUNK : CURL_TAIL) : i > HIP + 8 && i <= HIP + 13 ? CURL_DRAPE : 0), this.curl);
+      // Draped along a ledge, it lies out straight, tail and all.
+      if (this.curl > 0) d = lerp(d, this.curlStyle === 'coil' ? this.curlDir * (i <= HIP ? CURL_TRUNK : CURL_TAIL) : 0, this.curl);
       ang = prevAng + d;
       const len = segH(this.z[i] - this.z[i - 1]);
       p.x = a.x + Math.cos(ang) * len;

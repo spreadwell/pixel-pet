@@ -910,9 +910,10 @@ const StateHandlers: Record<State, Handler> = {
   [STATE.NAP]: {
     enter(g) {
       const r = g.napRock!, h = g.head;
-      // Lying in from the nearer end, facing along the block, just back from its edge.
-      const face = h.x < r.x + r.w / 2 ? 1 : -1, x = face > 0 ? r.x + 34 : r.x + r.w - 34, y = r.y - 3;
-      g.stateData = { phase: 'go', face, spot: { x: x - face * 14, y }, end: { x, y }, ledge: r.y, tilt: 0, sleepFor: 600 + Math.random() * 900, t: 0 };
+      // Lying in from the nearer end, facing along the block, hips at that end so the tail
+      // goes over it.
+      const face = h.x < r.x + r.w / 2 ? 1 : -1, x = face > 0 ? r.x + 20 : r.x + r.w - 20, y = r.y - 3;
+      g.stateData = { phase: 'go', face, spot: { x: x - face * 14, y }, end: { x, y }, corner: face > 0 ? r.x : r.x + r.w, ledge: r.y, tilt: 0, sleepFor: 600 + Math.random() * 900, t: 0 };
       g.planRoute(x - face * 14, y);
     },
     update(g) {
@@ -1154,9 +1155,9 @@ export class Personality {
   /** Ticks until it will start another game with the graph. */
   playCooldown = 0;
   /** Napping on a block: the view turned over about its edge, and how far (see GeckoRenderer.tilt). */
-  get napTilt(): { pivot: number; amount: number } | null {
+  get napTilt(): { pivot: number; amount: number; end: number; face: 1 | -1 } | null {
     const sd = this.stateData;
-    return this.state === STATE.NAP && sd.tilt > 0 ? { pivot: sd.ledge, amount: sd.tilt } : null;
+    return this.state === STATE.NAP && sd.tilt > 0 ? { pivot: sd.ledge, amount: sd.tilt, end: sd.corner, face: sd.face } : null;
   }
 
   /** Fast asleep, curled up with its eyes shut: the Z's come out. */
@@ -1619,6 +1620,7 @@ export class Personality {
     this.destX += dx; this.destY += dy;
     if (this.state === STATE.NAP && this.stateData.spot) {
       for (const q of [this.stateData.spot, this.stateData.end]) { q.x += dx; q.y += dy; }
+      this.stateData.corner += dx;
       this.stateData.ledge += dy;
       if (this.stateData.x !== undefined) this.stateData.x += dx;
     }

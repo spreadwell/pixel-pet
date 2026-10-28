@@ -123,7 +123,7 @@ export class GeckoRenderer {
    * spheres along the spine, resting on the ground, legs reaching down to it — so turning
    * the view moves smoothly from one to the other. Past the edge, it hangs down the front.
    */
-  tilt: { pivot: number; amount: number } | null = null;
+  tilt: { pivot: number; amount: number; end?: number; face?: 1 | -1 } | null = null;
   /** Where the head was drawn last (canvas px), for the Z's. */
   headAt = { x: 0, y: 0 };
   private up = new Float32Array(0);
@@ -162,15 +162,24 @@ export class GeckoRenderer {
       const p = b.project(x, y, z), px = p.x * res;
       if (!tilt) return { x: px, y: p.y * res };
       // The view turns about the line the body lies along (so a body lying a little askew
-      // doesn't come out arched), and as it turns that line settles onto the block's edge,
-      // so the belly rests right on it.
-      const along = axis * (p.x - axisX), line = (b.pts[12].y + along) * res, edge = (tilt.pivot + along) * res;
+      // doesn't come out arched or crooked), and as it turns that line settles, level, onto
+      // the block's edge, so the belly rests right on it.
+      const line = (b.pts[12].y + axis * (p.x - axisX)) * res, edge = tilt.pivot * res;
       const anchor = lerp(line, edge, this.tiltA), py = p.y * res;
-      // On top: depth foreshortens and height rises. Past the edge: down the front.
-      // Only the tail and limbs hang over; the head and trunk stay up on top.
-      if (py <= edge || !hang) return { x: px, y: anchor + (Math.min(py, edge) - line) * cos - h * res * sin };
-      const over = py - edge;
-      return { x: px, y: anchor + (edge - line) * cos + over - h * res * sin * Math.max(0, 1 - over / (3 * res)) };
+      // On top: depth foreshortens and height rises. The head and trunk stay up there.
+      if (!hang) return { x: px, y: anchor + (Math.min(py, edge) - line) * cos - h * res * sin };
+      // The tail and limbs hang: past the front edge, down the front of the block...
+      let sy: number;
+      if (py > edge) {
+        const over = py - edge;
+        sy = anchor + (edge - line) * cos + over - h * res * sin * Math.max(0, 1 - over / (3 * res));
+      } else sy = anchor + (py - line) * cos - h * res * sin;
+      // ...and past the end of the block, down beside it.
+      if (tilt.end !== undefined && tilt.face) {
+        const end = tilt.end * res, out = (end - px) * tilt.face;
+        if (out > 0) return { x: lerp(px, end - tilt.face * 0.5 * res, Math.min(1, out / (2 * res)) * this.tiltA), y: sy + out * this.tiltA };
+      }
+      return { x: px, y: sy };
     };
     const shadowRows = cos;
     const flat: Project = (x, y) => ({ x: x * res, y: y * res });
