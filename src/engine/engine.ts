@@ -39,8 +39,7 @@ export class PetEngine {
   private renderer = new GeckoRenderer();
   private body!: Body;
   private brain!: Personality;
-  /** Palettes from cool to sun-warmed; the gecko warms while basking or sleeping. */
-  private pals: Palette[] = [];
+  private pal!: Palette;
   private c!: Ctx;
   private raf = 0;
   private last = 0;
@@ -95,7 +94,7 @@ export class PetEngine {
     body.ground = (x, y) => (body.under && world.coverAt(x, y) ? 0 : world.groundAt(x, y));
     this.c = {
       body: this.body, world: this.world, input: this.input, swarm: this.swarm, nibbler: this.nibbler, reactions: this.reactions,
-      particles: this.particles, pal: this.pals[0], opts: this.opts, now: performance.now(), pointer: null, pointerSpeed: 0,
+      particles: this.particles, pal: this.pal, opts: this.opts, now: performance.now(), pointer: null, pointerSpeed: 0,
     };
     this.brain = new Personality(this.c, !at);
     this.last = performance.now();
@@ -131,11 +130,11 @@ export class PetEngine {
 
   refreshPalette() {
     this.buildPalettes();
-    if (this.c) this.c.pal = this.pals[0];
+    if (this.c) this.c.pal = this.pal;
   }
 
   private buildPalettes() {
-    this.pals = [0, 0.5, 1].map((w) => buildPalette(this.win.document, this.opts.color, w));
+    this.pal = buildPalette(this.win.document, this.opts.color);
   }
 
   /** Text was written or a task completed: attract a bug, preferably near the caret. */
@@ -244,7 +243,7 @@ export class PetEngine {
     const p = this.input.pointerAt(now);
     c.pointer = p ? { x: p.x / this.opts.px, y: p.y / this.opts.px } : null;
     c.pointerSpeed = this.input.speed(now) / this.opts.px;
-    c.pal = this.pals[0];
+    c.pal = this.pal;
 
     const drive = this.brain.update();
     this.body.update(TICK, drive);
@@ -267,7 +266,7 @@ export class PetEngine {
     const g = this.ctx2d;
     this.frame++;
     g.clearRect(0, 0, this.canvas.width, this.canvas.height);
-    const pal = this.pals[Math.round(this.brain.color.warmth * 2)];
+    const pal = this.pal;
     const res = this.res;
     for (const b of this.swarm.bugs) if (b.z < 1) b.draw(g, pal, this.frame, res);
     // Side panels lie over the note: whatever part of the gecko has crept under one is hidden.

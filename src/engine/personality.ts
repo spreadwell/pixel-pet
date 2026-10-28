@@ -206,13 +206,6 @@ class HeadLookBehavior {
   }
 }
 
-class ColorWarmthBehavior {
-  warmth = 0;
-  update(state: State, petted: boolean) {
-    this.warmth = lerp(this.warmth, state === STATE.BASKING || state === STATE.SLEEP || petted ? 1 : 0, 0.01);
-  }
-}
-
 // ═══════════════════════════════════════════════════════════════════
 // STATE HANDLERS — each state defines enter() and update()
 // ═══════════════════════════════════════════════════════════════════
@@ -640,7 +633,6 @@ export class Personality {
   burstTimer = 0;
 
   headLook = new HeadLookBehavior();
-  color = new ColorWarmthBehavior();
 
   state: State = STATE.IDLE;
   stateTimer = 0;
@@ -1093,7 +1085,6 @@ export class Personality {
     if (!c.world.inBounds(this.homeX, this.homeY, 8)) this.chooseHome();
 
     this.needs.update(this.state);
-    this.color.update(this.state, this.petted);
     this.speed = (this.traits.resolve('baseSpeed') + this.traits.resolve('speedBoost')) * S;
 
     const p = this.pointer;
