@@ -478,6 +478,7 @@ const StateHandlers: Record<State, Handler> = {
 
   [STATE.SLEEP]: {
     enter(g) {
+      g.body.curlStyle = 'coil';
       const baseSleep = g.traits.resolve('sleepDuration');
       g.stateData = { duration: baseSleep + Math.random() * baseSleep * 1.3, nextPeekTime: 60 + Math.random() * 100, peekUntil: 0, wakeAt: 0 };
       g.sleepPeeking = false;

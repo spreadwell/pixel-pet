@@ -91,7 +91,7 @@ const STRIDE_MAX = 8;
 /** A limb stretched past this fraction of its length looks locked straight. */
 const COMFORT = 0.9;
 /** Curled up asleep: how much each joint of the trunk and of the tail bends (radians). */
-const CURL_TRUNK = 0.14, CURL_TAIL = 0.2;
+const CURL_TRUNK = 0.05, CURL_TAIL = 0.11;
 const MAX_STEP_HZ = 8;
 /** Steepest the body drapes over a step: height change per art px of spine. */
 const DRAPE_SLOPE = 0.8;
@@ -389,7 +389,7 @@ export class Body {
     }
 
     // ── Trunk and tail follow with stiffness ────────────────
-    this.curl = approach(this.curl, this.curlTarget, this.curlTarget > this.curl ? 0.9 : 2.2, dt);
+    this.curl = approach(this.curl, this.curlTarget, this.curlTarget > this.curl ? (this.curlStyle === 'coil' ? 0.3 : 0.9) : 2.2, dt);
     if (this.curlTarget === 0 && this.curl < 0.02) this.curlStyle = 'coil';
     const path = this.path;
     for (let i = 0; i <= NECK; i++) { path[i].x = this.pts[i].x; path[i].y = this.pts[i].y; }
