@@ -506,42 +506,66 @@ const StateHandlers: Record<State, Handler> = {
     },
   },
 
-  // You're typing: creep closer in hesitant shuffles and lurk a little way off, watching.
+  // You're typing: it stalks the caret, drawn to it and a little afraid of it. It creeps
+  // in, stop-start, head locked on the caret, tail tip twitching when it freezes, and
+  // keeps a little way off; if the caret comes too close it startles and scurries back,
+  // watches a moment, and starts creeping in again.
   [STATE.LURK]: {
-    enter(g) { g.stateData = { spot: null, anchor: null, timer: 0, leaveAt: 1200 + Math.random() * 1500 }; },
+    enter(g) { g.stateData = { phase: 'stalk', spot: null, anchor: null, timer: 0, phaseTimer: 0 }; },
     update(g) {
       const sd = g.stateData, head = g.head, w = g.c.world;
       sd.timer++;
+      sd.phaseTimer++;
       const k = w.caret ?? w.lastCaret;
-      // Stopped typing (the close look is fresh ink's job), or lost interest.
-      if (!k || !g.c.input.typedWithin(g.c.now, 4000) || sd.timer > sd.leaveAt) {
-        g.lurkCooldown = 1800 + Math.random() * 2400;
+      // You stopped typing (the close look at the new words is fresh ink's job).
+      if (!k || !g.c.input.typedWithin(g.c.now, 4000) || sd.timer > 6000) {
+        g.lurkCooldown = 300;
         return { targetSpeed: 0.05 * S, transition: STATE.IDLE };
       }
-      // Somewhere to watch from: re-chosen when the caret moves off, or comes too close.
       const near = dist(head.x, head.y, k.x, k.y);
-      if (!sd.spot || dist(sd.anchor.x, sd.anchor.y, k.x, k.y) > 22 || near < 18) {
+      const toCaret = Math.atan2(k.y - head.y, k.x - head.x);
+
+      if (sd.phase === 'scurry') {
+        // Away, fast, to a safer distance.
+        const wp = g.waypoint(sd.spot.x, sd.spot.y);
+        g.targetAngle = Math.atan2(wp.y - head.y, wp.x - head.x);
+        if (dist(head.x, head.y, sd.spot.x, sd.spot.y) < 5 || sd.phaseTimer > 70) { sd.phase = 'wary'; sd.phaseTimer = 0; sd.waryFor = 50 + Math.random() * 50; g.currentSpeed = 0; }
+        return { targetSpeed: g.speed * 2.2 };
+      }
+      if (sd.phase === 'wary') {
+        // Turned to face it, frozen, watching, before it dares to creep back in.
+        g.targetAngle = toCaret;
+        g.headLook.lookAt(angleDiff(g.angle, toCaret));
+        if (sd.phaseTimer > sd.waryFor) { sd.phase = 'stalk'; sd.phaseTimer = 0; sd.spot = null; }
+        return { targetSpeed: sd.phaseTimer < 20 ? 0.25 * S : 0 };
+      }
+
+      // Too close: startle and scurry back.
+      if (near < 14) {
+        sd.phase = 'scurry'; sd.phaseTimer = 0;
+        const away = Math.atan2(head.y - k.y, head.x - k.x) + (Math.random() - 0.5) * 0.8;
+        sd.spot = w.clampToBounds(head.x + Math.cos(away) * (30 + Math.random() * 20), head.y + Math.sin(away) * (30 + Math.random() * 20), 8);
+        g.planRoute(sd.spot.x, sd.spot.y);
+        g.flick();
+        return { targetSpeed: g.speed * 2.2 };
+      }
+      // A spot a little way off, re-chosen as the caret moves along.
+      if (!sd.spot || dist(sd.anchor.x, sd.anchor.y, k.x, k.y) > 10) {
         sd.spot = g.lurkSpot(k);
         sd.anchor = { ...k };
         g.planRoute(sd.spot.x, sd.spot.y);
       }
-      const toCaret = Math.atan2(k.y - head.y, k.x - head.x);
-      const d = dist(head.x, head.y, sd.spot.x, sd.spot.y);
-      if (d > 4) {
-        // From afar it comes most of the way at a walk with the odd glance; close in it
-        // goes hesitantly, a little shuffle, then a pause to watch, then another.
-        const wp = g.waypoint(sd.spot.x, sd.spot.y);
-        g.targetAngle = Math.atan2(wp.y - head.y, wp.x - head.x);
-        const far = d > 40;
-        const beat = sd.timer % (far ? 90 : 70), go = far ? beat < 70 : beat < 30;
-        if (!go) g.headLook.lookAt(angleDiff(g.angle, toCaret));
-        return { targetSpeed: go ? (far ? g.speed * 0.8 : 0.45 * S) : 0 };
-      }
-      // In place: watch the caret, blinking, tasting the air now and then.
       g.headLook.lookAt(angleDiff(g.angle, toCaret));
-      if (sd.timer % 150 === 60) g.blink();
-      if (sd.timer % 220 === 120) g.flick();
-      return { targetSpeed: 0 };
+      const d = dist(head.x, head.y, sd.spot.x, sd.spot.y);
+      if (d < 3) return { targetSpeed: 0 };
+      const wp = g.waypoint(sd.spot.x, sd.spot.y);
+      g.targetAngle = Math.atan2(wp.y - head.y, wp.x - head.x);
+      // From afar it hurries closer; falling behind as you type along, it catches up at a
+      // walk; within striking range it stalks: creep, freeze, creep.
+      if (d > 50) { sd.frozen = false; return { targetSpeed: g.speed * 1.3 }; }
+      if (d > 20) { sd.frozen = false; return { targetSpeed: g.speed }; }
+      sd.frozen = sd.phaseTimer % 60 >= 34;
+      return { targetSpeed: sd.frozen ? 0 : 0.8 * S };
     },
   },
 
@@ -1014,13 +1038,13 @@ export class Personality {
   /** Is it calm enough to take an interest in something new? */
   get calm() { const s = this.state; return s === STATE.IDLE || s === STATE.EXPLORE || s === STATE.BASKING || s === STATE.LURK; }
 
-  /** A place to lurk while you type: a little way from the caret, on its own side, off the words. */
+  /** Where to stalk the caret from: a little way off, on its own side, off the words if it can. */
   lurkSpot(k: { x: number; y: number }) {
     const w = this.c.world, h = this.head;
     const side = Math.atan2(h.y - k.y, h.x - k.x);
     let fallback: { x: number; y: number } | null = null;
     for (let i = 0; i < 16; i++) {
-      const a = side + (Math.random() - 0.5) * 1.8, d = 26 + Math.random() * 14;
+      const a = side + (Math.random() - 0.5) * 1.8, d = 18 + Math.random() * 8;
       const q = w.clampToBounds(k.x + Math.cos(a) * d, k.y + Math.sin(a) * d, 8);
       fallback ??= q;
       if (!w.onText(q.x, q.y, 2)) return q;
@@ -1215,7 +1239,8 @@ export class Personality {
       c.world.shifts.length = 0;
     }
     const k = c.world.caret;
-    if (this.typing && k && this.state !== STATE.FLEE && this.state !== STATE.STARTLE && this.bodyDistance(k.x, k.y) < 12) this.scare(k.x, k.y, true);
+    // (Stalking the caret, it keeps its own distance.)
+    if (this.typing && k && this.state !== STATE.FLEE && this.state !== STATE.STARTLE && this.state !== STATE.LURK && this.bodyDistance(k.x, k.y) < 12) this.scare(k.x, k.y, true);
   }
 
   /** Every few minutes, offer it a letter to nibble — only when you're not typing. */
@@ -1257,7 +1282,7 @@ export class Personality {
     // You're typing: now and then it creeps over to lurk nearby and watch.
     if (this.lurkCooldown > 0) this.lurkCooldown--;
     const caret = c.world.caret;
-    if (this.state !== STATE.LURK && this.lurkCooldown <= 0 && this.calm && caret && this.typing && Math.random() < 0.008) {
+    if (this.state !== STATE.LURK && this.lurkCooldown <= 0 && this.calm && caret && this.typing && Math.random() < 0.04) {
       const d = this.distTo(caret.x, caret.y);
       if (d > 30) this.enterState(STATE.LURK);
     }
@@ -1305,7 +1330,7 @@ export class Personality {
     b.lidTarget = sleeping ? (this.sleepPeeking ? 0.25 : 1) : this.petted ? 0.55 : 0;
     b.breathRate = sleeping || this.state === STATE.BASKING || this.petted ? 0.29 : 0.57;
     b.breathDepth = sleeping ? 0.085 : 0.05;
-    b.tailTwitch = this.state === STATE.HELD ? 0.8 : this.state === STATE.NIBBLE && this.stateData.phase === 'grab' && this.stateData.stuck ? 0.6 : this.state === STATE.HUNT ? 0.7 : this.state === STATE.STARTLE ? 0.35 : 0;
+    b.tailTwitch = this.state === STATE.HELD ? 0.8 : this.state === STATE.LURK && (this.stateData.frozen || this.stateData.phase === 'wary') ? 0.5 : this.state === STATE.NIBBLE && this.stateData.phase === 'grab' && this.stateData.stuck ? 0.6 : this.state === STATE.HUNT ? 0.7 : this.state === STATE.STARTLE ? 0.35 : 0;
     if (this.mouthTicks > 0) { this.mouthTicks--; b.mouthTarget = this.mouthTicks > 4 ? 1 : 0.4; }
     else if (this.state !== STATE.NIBBLE && this.state !== STATE.HUNT) b.mouthTarget = 0;
 
