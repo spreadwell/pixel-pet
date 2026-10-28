@@ -10,7 +10,6 @@
   "scripts": {
     "build": "node esbuild.config.mjs production",
     "dev": "node esbuild.config.mjs",
-    "harness": "node esbuild.config.mjs harness",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

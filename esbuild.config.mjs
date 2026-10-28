@@ -2,20 +2,9 @@ import esbuild from 'esbuild';
 import process from 'node:process';
 import builtins from 'builtin-modules';
 
-const mode = process.argv[2];
-const production = mode === 'production';
-const harness = mode === 'harness';
+const production = process.argv[2] === 'production';
 
-const context = await esbuild.context(harness ? {
-  entryPoints: ['harness/harness.ts', 'harness/studio.ts', 'harness/compare.ts'],
-  bundle: true,
-  format: 'iife',
-  target: 'es2022',
-  platform: 'browser',
-  sourcemap: 'inline',
-  outdir: 'harness',
-  logLevel: 'info',
-} : {
+const context = await esbuild.context({
   entryPoints: ['src/main.ts'],
   bundle: true,
   external: ['obsidian', 'electron', ...builtins],
@@ -28,7 +17,7 @@ const context = await esbuild.context(harness ? {
   logLevel: 'info',
 });
 
-if (production || harness) {
+if (production) {
   await context.rebuild();
   await context.dispose();
 } else {

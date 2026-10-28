@@ -38,7 +38,7 @@ Works on desktop and mobile. On touch screens, tap near it to get its attention,
 npm install
 npm run typecheck
 npm run build      # main.js for Obsidian
-npm run harness    # harness/harness.js, then open harness/index.html over http
+npm run dev        # rebuild on change
 ```
 
-The engine in `src/engine/` has no Obsidian dependency. `harness/index.html` mimics Obsidian's layout so behavior can be tuned in a plain browser, with a loupe, contact sheets, and `sim(seconds)` to step the simulation. `harness/studio.html` drives the bare body at fixed speeds and paints frame-by-frame sheets (`strips([0, 30, 80])`, `turn(30)`, `zoom(n)`) for judging the sprite and gait.
+The engine in `src/engine/` has no Obsidian dependency.
