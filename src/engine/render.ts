@@ -72,6 +72,10 @@ function disc(cx: number, cy: number, r: number, fn: (x: number, y: number, dx: 
  * half, while nearly end-on the shaded side thins away to nothing.
  */
 const SHADE_EDGE = 0.04;
+/** How close to the edge of the shade a pixel keeps last frame's lit or shaded (see holdEdges). */
+const SHADE_HOLD = 0.05;
+/** How close to the outline, as a share of the radius either way, a pixel keeps last frame's on or off. */
+const EDGE_HOLD = 0.08;
 /** Side-on, how far its legs hold its body up off the ground when it's standing, art px. */
 const STAND = 1.6;
 /** Napping on a block: how quickly the tail turns down over the block's end (art px to turn most of the way). */
@@ -108,6 +112,10 @@ const LIGHT = { x: -0.6, y: -0.8 };
 export class GeckoRenderer {
   private depth = new Float32Array(0);
   private legsDrawn: LegPixel[] = [];
+  /** Last frame's body pixels, and which of them were lit (canvas px, y * 65536 + x). */
+  private wasOn = new Set<number>();
+  private wasLit = new Map<number, boolean>();
+  private wasShadow = new Set<number>();
 
   /** Is the canvas-px box from (x0, y0) to (x1, y1) clear of everything drawn of the body and legs last frame? */
   clearOf(x0: number, y0: number, x1: number, y1: number) {
@@ -140,6 +148,12 @@ export class GeckoRenderer {
    * shimmer, which makes the legs look like they wriggle even when the motion is smooth.
    */
   stableLegs = true;
+  /**
+   * Keep a pixel right on the outline, or right on the edge of the shade, as it was last
+   * frame until the body has clearly moved past it: otherwise the sway of the gait and
+   * the rise and fall of its breath flip edge pixels back and forth, which shimmers.
+   */
+  holdEdges = true;
   /** Keep a planted foot's toes where they were set down, instead of turning with the body. */
   lockToes = true;
   /** How the eyes are drawn: one pixel, a 2×2 block, a block with a glint, or bulging past the head. */
@@ -259,7 +273,11 @@ export class GeckoRenderer {
       const rr = b.width(i) * b.breathScale(i) * b.squeeze[i] * (1 + NEARER * g) * res;
       // Tipped over, the shadow on the ground foreshortens into a narrow band.
       if (shadowRows < 0.999) { const sr = this.tiltA > 0.6 ? 0 : Math.round(rr * shadowRows); for (let dy = -sr; dy <= sr; dy++) for (let dx = -Math.round(rr); dx <= Math.round(rr); dx++) mark(Math.floor(q.x + dx), Math.floor(q.y + dy)); }
-      else disc(q.x, q.y, rr, (x, y) => mark(x, y));
+      else {
+        // The shadow's edge is held like the body's (see holdEdges).
+        const h = this.holdEdges ? EDGE_HOLD : 0, inner = (rr * (1 - h)) ** 2;
+        disc(q.x, q.y, rr * (1 + h), (x, y, _dx, _dy, d2) => { if (d2 <= inner || this.wasShadow.has(y * 65536 + x)) mark(x, y); });
+      }
     }
     if (this.tiltA <= 0.6) for (const p of this.legPixels(b, pal, flat, this.snappedShadow, res)) {
       const ax = (p.x + 0.5) / res, ay = (p.y + 0.5) / res;
@@ -268,9 +286,13 @@ export class GeckoRenderer {
       for (let by = 0; by < this.brush; by++) for (let bx = 0; bx < this.brush; bx++) mark(Math.floor(q.x) + bx, Math.floor(q.y) + by);
     }
     ctx.fillStyle = pal.shadow;
+    const shaded = new Set<number>();
     for (let y = 0; y < sh; y++) for (let x = 0; x < sw; x++) {
-      if (shadow[y * sw + x] && !(this.depth[y * bw + x] > 0)) ctx.fillRect(bx + x, by + y, 1, 1);
+      if (!shadow[y * sw + x]) continue;
+      shaded.add((by + y) * 65536 + bx + x);
+      if (!(this.depth[y * bw + x] > 0)) ctx.fillRect(bx + x, by + y, 1, 1);
     }
+    this.wasShadow = shaded;
 
     // Side-on, the far legs are hidden behind the body and the near ones drawn over it,
     // a shade darker so elbow and knee stand out against the flank.
@@ -334,10 +356,14 @@ export class GeckoRenderer {
       const r = Math.max(ra * taper * (1 + NEARER * Math.max(0, z)), i > HIP && this.tiltA > 0 ? 0.6 : 0) * res;
       // Tipped over, each round section is seen more from the side, so less tall.
       const ry = r * Math.sqrt(this.tiltCos ** 2 + (fl * this.tiltSin) ** 2);
-      ellipse(cx, cy, r, ry, (x, y, dx, dy, d2) => {
+      const hold = this.holdEdges ? EDGE_HOLD : 0;
+      ellipse(cx, cy, r * (1 + hold), ry * (1 + hold), (x, y, dx, dy, d2h) => {
         const lx = x - this.bx, ly = y - this.by;
         if (lx < 0 || ly < 0 || lx >= this.bw || ly >= this.bh) return;
-        const depth = 1 - Math.sqrt(d2);
+        // Well inside, it's on; within the hold either side of the outline, it's on if it was.
+        const d2 = d2h * (1 + hold) ** 2;
+        if (d2 > (1 - hold) ** 2 && !this.wasOn.has(y * 65536 + x)) return;
+        const depth = Math.max(0.001, 1 - Math.sqrt(d2));
         const k = ly * this.bw + lx;
         if (depth > this.depth[k]) {
           this.depth[k] = depth;
@@ -455,6 +481,7 @@ export class GeckoRenderer {
 
   private paintBody(ctx: CanvasRenderingContext2D, b: Body, pal: Palette) {
     const { bw, bh, bx, by, depth, lat, seg } = this;
+    const on = new Set<number>(), lits = new Map<number, boolean>();
     // How the spine bends over the terrain at each point: positive where it crests over
     // a ridge or the lip of a ledge, negative in the dip or crease below one.
     const bend = this.bend;
@@ -466,12 +493,17 @@ export class GeckoRenderer {
       const k = y * bw + x;
       if (depth[k] <= 0) continue;
       const side = lat[k] * this.light, l = this.tiltA > 0 ? lerp(side, this.up[k] + 0.25, this.tiltA) : side;
-      const lit = l + SHADE_EDGE > 0, d = bend[seg[k]];
+      const v = l + SHADE_EDGE, key = (by + y) * 65536 + (bx + x);
+      const lit = !this.holdEdges ? v > 0 : v > SHADE_HOLD ? true : v < -SHADE_HOLD ? false : this.wasLit.get(key) ?? v > 0, d = bend[seg[k]];
+      on.add(key);
+      lits.set(key, lit);
       // Side-on, the line of the back catches the light.
       const rim = this.tiltA > 0.6 && lit && (y === 0 || depth[k - bw] <= 0);
       ctx.fillStyle = lit ? (d > 0.5 || rim ? pal.crest : pal.base) : d < -0.5 ? pal.crease : pal.shade;
       ctx.fillRect(bx + x, by + y, 1, 1);
     }
+    this.wasOn = on;
+    this.wasLit = lits;
   }
 
   private paintHead(ctx: CanvasRenderingContext2D, b: Body, pal: Palette, project: Project, res: number) {
