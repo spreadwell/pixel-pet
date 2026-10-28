@@ -8,9 +8,10 @@
  * does the moving. A letter the gecko has stolen is drawn in its mouth on a second
  * layer just above it.
  *
- * Interface: tabs, ribbon icons, file and folder names, status bar items and toolbar
- * icons give a little jiggle when stepped on — a Web Animation that adds to whatever
- * transform they already have and leaves layout alone.
+ * Interface: small icons (ribbon, toolbar, view header) dip a touch under a foot and spring
+ * back — a Web Animation that adds to whatever transform they already have and leaves
+ * layout alone. Wide things (tabs, file rows, the status bar) stay put: moving them reads
+ * as the interface rocking.
  *
  * Coordinates are CSS pixels.
  */
@@ -21,10 +22,7 @@ const HIGHLIGHT = 'pixel-pet-jostle';
 /** The nibbler's highlight: letters that have been eaten and are not there to press. */
 const EATEN = 'pixel-pet-nibble';
 const LETTER_ROOTS = '.cm-content, .markdown-preview-view';
-const JIGGLE = [
-  '.workspace-tab-header', '.side-dock-ribbon-action', '.nav-file-title', '.nav-folder-title',
-  '.tree-item-self', '.status-bar-item', '.view-action', '.clickable-icon', '.mobile-navbar-action',
-].join(', ');
+const JIGGLE = ['.side-dock-ribbon-action', '.view-action', '.clickable-icon', '.mobile-navbar-action'].join(', ');
 const LETTER_LIFE = 0.35;
 const MAX_LETTERS = 48;
 
@@ -280,14 +278,14 @@ export class Reactions {
     const now = performance.now();
     if ((this.jiggled.get(el) ?? 0) > now) return true;
     this.jiggled.set(el, now + 450);
-    const px = dx * 1.6 * strength, py = (dy * 1.6 + 1) * strength, r = (Math.random() < 0.5 ? -1 : 1) * 2.5 * strength;
+    // A small press straight down and a settle: no sideways shove, no rotation.
+    const py = Math.min(1.3, strength) * 1.2;
     el.animate([
-      { transform: 'translate(0, 0) rotate(0deg)' },
-      { transform: `translate(${px}px, ${py}px) rotate(${r}deg)`, offset: 0.2 },
-      { transform: `translate(${-px * 0.4}px, ${-py * 0.4}px) rotate(${-r * 0.5}deg)`, offset: 0.55 },
-      { transform: `translate(${px * 0.15}px, ${py * 0.15}px) rotate(${r * 0.15}deg)`, offset: 0.8 },
-      { transform: 'translate(0, 0) rotate(0deg)' },
-    ], { duration: 420, easing: 'ease-out', composite: 'add' });
+      { transform: 'translateY(0)' },
+      { transform: `translateY(${py}px) scale(0.97)`, offset: 0.25 },
+      { transform: `translateY(${-py * 0.2}px)`, offset: 0.6 },
+      { transform: 'translateY(0)' },
+    ], { duration: 320, easing: 'ease-out', composite: 'add' });
     return true;
   }
 }

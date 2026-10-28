@@ -200,8 +200,8 @@ export class PetEngine {
   }
 
   /**
-   * Footfalls make the workspace react: letters dip under its feet, tabs and file names
-   * jiggle. Not while it is under a panel, nor right where you are typing.
+   * Footfalls make the workspace react: letters dip under its feet, small icons press
+   * down. Not while it is under a panel, nor right where you are typing.
    */
   private react() {
     const b = this.body, px = this.opts.px;
