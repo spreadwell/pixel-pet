@@ -8,7 +8,7 @@ Your workspace is its terrain. It finds its way along the margins and the gaps b
 
 It notices what happens in Obsidian: open the command palette or a dialog and it freezes and watches until it closes; a notice popping up draws it over to pounce; drag a file or a tab and it chases it; open another note and it has a good look round. When you stop typing, it comes over to sniff along the words you just wrote.
 
-Rest your pointer somewhere nearby and it takes an interest: it turns to look, drifts closer, and ends up watching it from a wary distance, as it does your caret while you type. Bring the pointer too close and it scurries off; move at it too fast and it freezes, then bolts. When you've been away for a while, it heads home, stretches out and sleeps.
+Rest your pointer somewhere nearby and it takes an interest: it turns to look, drifts closer, and ends up watching it from a wary distance, as it does your caret while you type. Move at it too fast and it freezes, then bolts. Out in the margins, bring the pointer to it slowly and hold it still on it to pet it. On or next to your text, though, a pointer coming near always sends it scurrying clear of the words, so it is never in the way of a click. When you've been away for a while, it heads home, stretches out and sleeps.
 
 Writing brings it food. Every few dozen words a fly drifts in from the edge of the window, and finishing a task brings out a cricket. It spots them from most of the window away and comes over to hunt them; a hungry gecko hunts harder; a full one would rather bask. It stalks, freezes with its tail twitching, and strikes. It doesn't always catch them.
 

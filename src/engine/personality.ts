@@ -556,12 +556,13 @@ const StateHandlers: Record<State, Handler> = {
       }
 
       // Too close, or right in the path of the line being written: startle and scurry back.
+      // Out in the open, a pointer that comes slowly is allowed close: it holds still,
+      // watching, and lets itself be petted. Anywhere near the words, or if it comes in a
+      // rush, it is too much.
+      const gentle = !caret && !g.nearText() && g.cursorSpeed < 2 * S;
+      if (near < 20 && gentle) { sd.frozen = true; return { targetSpeed: 0 }; }
       if (near < 20 || (caret && Math.abs(head.y - k.y) < 7 && Math.abs(head.x - k.x) < 40)) {
-        sd.phase = 'scurry'; sd.phaseTimer = 0;
-        const away = Math.atan2(head.y - k.y, head.x - k.x) + (Math.random() - 0.5) * 0.8;
-        sd.spot = w.clampToBounds(head.x + Math.cos(away) * (30 + Math.random() * 20), head.y + Math.sin(away) * (30 + Math.random() * 20), 8);
-        g.planRoute(sd.spot.x, sd.spot.y);
-        g.flick();
+        g.scurryFrom(k);
         return { targetSpeed: g.speed * 2.2 };
       }
       // A spot a little way off, re-chosen as the caret moves along.
@@ -1094,6 +1095,35 @@ export class Personality {
     return s === STATE.IDLE || s === STATE.EXPLORE || s === STATE.BASKING || s === STATE.LURK || s === STATE.CURIOUS;
   }
 
+  /** Is any of its head or trunk on, or right by, the text of the note? */
+  nearText() {
+    const w = this.c.world, b = this.body;
+    return [0, 6, 12, 18].some((i) => w.onText(b.pts[i].x, b.pts[i].y, 6));
+  }
+
+  /** Startle and dash from `from` (art px) to somewhere clear of the words, then watch warily. */
+  scurryFrom(from: { x: number; y: number }) {
+    const sd = this.stateData, h = this.head, w = this.c.world;
+    const away = Math.atan2(h.y - from.y, h.x - from.x);
+    let best: { x: number; y: number } | null = null, bestScore = -Infinity;
+    for (const r of [24, 34, 46, 60, 76, 96, 120]) {
+      for (let i = 0; i < 12; i++) {
+        const a = away + ((i - 5.5) / 6) * Math.PI;
+        const q = w.clampToBounds(h.x + Math.cos(a) * r, h.y + Math.sin(a) * r, 8);
+        if (w.onText(q.x, q.y, 8) || dist(q.x, q.y, from.x, from.y) < 26) continue;
+        // Nearest clear ground, leaning away from what it is fleeing.
+        const score = Math.cos(angleDiff(away, a)) * 20 - r;
+        if (score > bestScore) { bestScore = score; best = q; }
+      }
+      if (best) break;
+    }
+    sd.phase = 'scurry';
+    sd.phaseTimer = 0;
+    sd.spot = best ?? w.clampToBounds(h.x + Math.cos(away) * 40, h.y + Math.sin(away) * 40, 8);
+    this.planRoute(sd.spot.x, sd.spot.y);
+    this.flick();
+  }
+
   /** Where to stalk the caret from: a little way off, on its own side, off the words if it can. */
   lurkSpot(k: { x: number; y: number }, caret = true) {
     const w = this.c.world, h = this.head;
@@ -1208,6 +1238,15 @@ export class Personality {
     if (p && st !== STATE.STARTLE && st !== STATE.FLEE && st !== STATE.HUNT) {
       if (this.cursorSpeed > this.traits.resolve('startleSpeed') * S && cursorDist < this.traits.resolve('startleDist') * S) { this.scareFrom(p); return; }
     }
+    // On or by the text, a pointer coming near always sends it scurrying clear of the words,
+    // so it is never in the way of a click there.
+    const scurrying = st === STATE.LURK && this.stateData.phase === 'scurry';
+    if (p && !scurrying && this.calm && cursorDist < 30 && this.bodyDistance(p.x, p.y) < 14 && this.nearText()) {
+      this.lurkTarget = 'pointer';
+      this.enterState(STATE.LURK);
+      this.scurryFrom(p);
+      return;
+    }
     // A resting pointer catches its eye from some way off (it never hunts it).
     if (p && !this.petted && !this.typing && (st === STATE.IDLE || st === STATE.BASKING || st === STATE.EXPLORE)) {
       if (cursorDist < CURIOUS_RADIUS && this.cursorSpeed < 4 * S && this.curiousCooldown <= 0 && Math.random() < 0.01) {
@@ -1267,7 +1306,9 @@ export class Personality {
 
   private updatePetting() {
     const p = this.pointer, st = this.state;
-    const calm = st === STATE.IDLE || st === STATE.BASKING || st === STATE.EXPLORE || st === STATE.SLEEP;
+    // Petting: a pointer held still on it, out in the open (by the words it scurries off instead).
+    const calm = (st === STATE.IDLE || st === STATE.BASKING || st === STATE.EXPLORE || st === STATE.SLEEP || st === STATE.LURK || st === STATE.CURIOUS)
+      && !(st === STATE.LURK && this.stateData.target === 'caret') && !this.nearText();
     const over = !!p && calm && this.cursorSpeed < 1.5 * S && this.bodyDistance(p.x, p.y) < 1.5;
     this.petTimer = over ? Math.min(40, this.petTimer + 1) : Math.max(0, this.petTimer - 2);
     const was = this.petted;
