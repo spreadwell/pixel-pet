@@ -91,6 +91,10 @@ export class GeckoRenderer {
   eyeStyle: 'dot' | 'big' | 'glint' | 'bulge' = 'dot';
   private snapped = new Map<Leg, Snapped>();
   private snappedShadow = new Map<Leg, Snapped>();
+  /** A pointed snout, no stray pixels on the head's outline, and eyes held steady. */
+  steadyHead = true;
+  /** The eye pixels last drawn (left, right), held like the leg joints so they don't flicker. */
+  private eyes: ({ x: number; y: number } | null)[] = [null, null];
 
   draw(ctx: CanvasRenderingContext2D, b: Body, pal: Palette, res = 1) {
     // The left-hand normal of the body against the light. As the animal turns, the line
@@ -105,6 +109,7 @@ export class GeckoRenderer {
 
     this.frame(b, project, res);
     this.rasteriseBody(b, project, res);
+    if (this.steadyHead) this.taperSnout(b, project, res);
     const legs = this.legPixels(b, pal, project, this.snapped, res);
 
     // The shadow: the body at its true size on the ground, each part offset by its height.
@@ -198,6 +203,38 @@ export class GeckoRenderer {
     }
   }
 
+  /**
+   * A pointed snout. The discs of the head end in a flat front a few pixels wide, which at
+   * this size reads as a square muzzle; trimming the corners off the front two rows keeps
+   * the tip to a pixel or two with a slope back to the jaw.
+   */
+  private taperSnout(b: Body, project: Project, res: number) {
+    const { bw, bh, bx, by, depth, seg } = this;
+    const fx = Math.cos(b.headAngle), fy = Math.sin(b.headAngle);
+    const c = project(b.pts[0].x, b.pts[0].y, b.z[0]);
+    const head: number[] = [];
+    let tmax = -Infinity;
+    for (let y = 0; y < bh; y++) for (let x = 0; x < bw; x++) {
+      const k = y * bw + x;
+      if (depth[k] <= 0 || seg[k] > 2) continue;
+      head.push(k);
+      tmax = Math.max(tmax, (bx + x + 0.5 - c.x) * fx + (by + y + 0.5 - c.y) * fy);
+    }
+    for (const k of head) {
+      const dx = bx + (k % bw) + 0.5 - c.x, dy = by + Math.floor(k / bw) + 0.5 - c.y;
+      const back = (tmax - (dx * fx + dy * fy)) / res, side = Math.abs(dx * fy - dy * fx) / res;
+      if ((back < 0.9 && side > 0.7) || (back < 1.9 && side > 1.4)) depth[k] = 0;
+    }
+    // A disc's rim can add a lone pixel to the head's outline for a frame or two; on a head
+    // this small that is a bump that comes and goes (and the eye lands on it), so shave it.
+    const on = (x: number, y: number) => x >= 0 && y >= 0 && x < bw && y < bh && depth[y * bw + x] > 0;
+    for (let y = 0; y < bh; y++) for (let x = 0; x < bw; x++) {
+      const k = y * bw + x;
+      if (depth[k] <= 0 || seg[k] > 5) continue;
+      if ((on(x - 1, y) ? 1 : 0) + (on(x + 1, y) ? 1 : 0) + (on(x, y - 1) ? 1 : 0) + (on(x, y + 1) ? 1 : 0) <= 1) depth[k] = 0;
+    }
+  }
+
   private paintBody(ctx: CanvasRenderingContext2D, b: Body, pal: Palette) {
     const { bw, bh, bx, by, depth, lat, seg } = this;
     // How the spine bends over the terrain at each point: positive where it crests over
@@ -240,9 +277,20 @@ export class GeckoRenderer {
       while (!onHead(e) && off > 0.3) { off -= 0.35; e = at(k, side * off); }
       return e;
     };
-    const left = eyeAt(3, 1);
-    let right = eyeAt(3, -1);
+    // An eye keeps its pixel until where it should be is clearly over the next one, as
+    // long as that pixel is still on the head: one pixel hopping back and forth with the
+    // sway of the walk reads as a flickering eye.
+    const held = (slot: number, k: number, side: number) => {
+      const p = b.pts[k], off = b.width(k) - 0.5;
+      const want = project(p.x + lx * side * off, p.y + ly * side * off, b.z[k]);
+      const prev = this.eyes[slot];
+      if (this.steadyHead && prev && Math.abs(want.x - (prev.x + 0.5)) < 0.9 && Math.abs(want.y - (prev.y + 0.5)) < 0.9 && onHead(prev)) return prev;
+      return eyeAt(k, side);
+    };
+    const left = held(0, 3, 1);
+    let right = held(1, 3, -1);
     for (const k of [4, 2]) if (right.x === left.x && right.y === left.y) right = eyeAt(k, -1);
+    this.eyes = [left, right];
     const closed = b.lid > 0.55, col = closed ? pal.shade : pal.eye;
     for (const [e, side] of [[left, 1], [right, -1]] as const) {
       if (this.eyeStyle === 'dot') { px(e, col); continue; }
