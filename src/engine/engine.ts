@@ -1,11 +1,11 @@
 import { Body } from './body';
-import { BugKind, Particles, Swarm } from './bugs';
+import { BUG_KINDS, BugKind, Pace, Particles, Swarm, paceFactor } from './bugs';
 import { Grabber } from './grab';
 import { InputTracker } from './input';
 import { clamp, rand } from './math';
 import { Nibbler } from './nibble';
 import { Palette, buildPalette } from './palette';
-import { BrainOptions, Ctx, Personality, Playground, STATE } from './personality';
+import { BrainOptions, Ctx, Personality, Playground, Pranks, STATE } from './personality';
 import { Reactions } from './reactions';
 import { GeckoRenderer } from './render';
 import { Zzz } from './zzz';
@@ -24,8 +24,10 @@ export interface PetOptions extends BrainOptions {
   debug?: boolean;
   /** The nodes of open graph views, in CSS px, for it to play with. */
   graph?: Playground;
-  /** Crickets as well as flies. */
-  crickets?: boolean;
+  /** Which kinds of bug turn up, and how busy they are. Flies only, by default. */
+  critters?: Partial<Record<BugKind, { enabled: boolean; pace: Pace }>>;
+  /** Buttons it could press when it's being mischievous, in CSS px. */
+  pranks?: Pranks;
 }
 
 /** The personality is tuned per 60 Hz tick, so the whole simulation runs on a fixed step. */
@@ -121,6 +123,7 @@ export class PetEngine {
       body: this.body, world: this.world, input: this.input, swarm: this.swarm, nibbler: this.nibbler, reactions: this.reactions,
       particles: this.particles, pal: this.pal, opts: this.opts, now: performance.now(), pointer: null, pointerSpeed: 0,
       graph: this.playground(),
+      pranks: this.prankable(),
     };
     this.brain = new Personality(this.c, !at);
     this.last = performance.now();
@@ -155,8 +158,14 @@ export class PetEngine {
     Object.assign(this.opts, o);
     if (o.color !== undefined) this.refreshPalette();
     if (o.nibble === false) { this.nibbler.clear(); this.brain?.dropLetter(); }
-    if (o.crickets === false) for (const bug of this.swarm.bugs) if (bug.kind === 'cricket') bug.alive = false;
+    // A kind of bug switched off goes, there and then.
+    if (o.critters) for (const bug of this.swarm.bugs) if (!this.allows(bug.kind)) bug.alive = false;
+    // More often than it was: the wait for the next prank shrinks to fit.
+    if (o.mischiefMinutes && this.brain) this.brain.mischiefCooldown = Math.min(this.brain.mischiefCooldown, o.mischiefMinutes[1] * 3600);
+    if ((o.traits || o.temperament) && this.opts.traits) this.brain?.setNature(this.opts.traits, this.opts.temperament);
   }
+
+  private allows(kind: BugKind) { return this.opts.critters?.[kind]?.enabled ?? kind === 'fly'; }
 
   /** The theme or styles changed: new colours, and new hover styles to copy. */
   refreshPalette() {
@@ -182,6 +191,13 @@ export class PetEngine {
   private lastNoteChange = 0;
 
   /** The graph's nodes as balls, in art px. */
+  /** The prank targets, in art px. */
+  private prankable(): Pranks | null {
+    const p = this.opts.pranks, px = this.opts.px;
+    if (!p) return null;
+    return { targets: () => p.targets().map((t) => ({ ...t, x: t.x / px, y: t.y / px })) };
+  }
+
   private playground(): Playground | null {
     const g = this.opts.graph, px = this.opts.px;
     if (!g) return null;
@@ -268,8 +284,10 @@ export class PetEngine {
   }
 
   /** Text was written or a task completed: attract a bug, preferably near the caret. */
-  spawnBug(kind: BugKind) {
-    this.swarm.spawn(kind, this.world, this.world.caret ?? undefined);
+  spawnBug(kind: BugKind, near = this.world.caret ?? undefined) {
+    if (!this.allows(kind)) return;
+    const bug = this.swarm.spawn(kind, this.world, near);
+    if (bug) bug.pace = paceFactor(this.opts.critters?.[kind]?.pace ?? 'normal');
   }
 
   /** What the pet is up to, in a few words. */
@@ -277,17 +295,19 @@ export class PetEngine {
 
   /**
    * A command from the pet panel: sleep, wake, explore, scout, eat, play, pushups, bask,
-   * nibble, come. Returns a few words to show if it can't, or null.
+   * nibble, prank, come. Returns a few words to show if it can't, or null.
    */
   command(cmd: string): string | null {
     if (!this.brain) return null;
     if (cmd === 'come') { this.summon(); return null; }
     if (cmd === 'scout') { this.noteChanged(true); return null; }
+    const kinds = BUG_KINDS.filter((k) => this.allows(k));
+    if (cmd === 'eat' && !kinds.length) return 'All the bugs are switched off in settings';
     const said = this.brain.command(cmd);
     if (cmd === 'eat') {
       // Something to eat turns up near it.
       const h = this.body.head;
-      this.swarm.spawn(this.opts.crickets && Math.random() < 0.5 ? 'cricket' : 'fly', this.world, { x: h.x, y: h.y });
+      this.spawnBug(kinds[Math.floor(Math.random() * kinds.length)], { x: h.x, y: h.y });
     }
     return said;
   }
@@ -458,7 +478,7 @@ export class PetEngine {
     this.renderer.draw(g, this.body, pal, res);
     const zFrom = { x: this.renderer.headAt.x / res, y: this.renderer.headAt.y / res };
     // Fast asleep: Z's.
-    this.zzz.draw(pal, this.brain.dozing ? { x: zFrom.x * this.opts.px, y: zFrom.y * this.opts.px } : null, performance.now());
+    this.zzz.draw(pal, this.brain.dozing ? { x: zFrom.x * this.opts.px, y: zFrom.y * this.opts.px } : null, performance.now(), this.opts.px);
     if (this.brain.carrying) {
       const s = this.brain.snout(), px = this.opts.px;
       this.reactions.hold((s.x + 0.5) * px, (s.y + 0.5) * px, this.body.headAngle);

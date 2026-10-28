@@ -203,6 +203,14 @@ export class Body {
   gulp = -1;
   /** A push-up display: how high the front legs are lifting the chest and head, art px. */
   pushup = 0;
+  /**
+   * Reaching out with a forefoot — the one nearer (x, y) — to press something there: `k`
+   * how far it has gone over to it (0..1), `z` how high above it the hand is (art px).
+   * (x, y) is where the hand is drawn when it's down, not a spot on the terrain.
+   */
+  reach: { x: number; y: number; z: number; k: number } | null = null;
+  /** The forefoot doing the reaching, while it is. */
+  reacher: Leg | null = null;
   private twitch = 0;
   private flexAmp = 0;
   /** Path-following spine (without flexion); `pts` is what is drawn. */
@@ -293,6 +301,19 @@ export class Body {
     return { x: c.x + (x - c.x) * s, y: c.y + (y - c.y) * s - LIFT * h };
   }
 
+  /**
+   * The spot on the terrain that is drawn at (x, y): the inverse of `project` at ground
+   * height there. `c` is where the body's middle will be (its middle now, by default).
+   */
+  unproject(x: number, y: number, c: Pt = this.pts[12]) {
+    let p = { x, y };
+    for (let i = 0; i < 3; i++) {
+      const h = Math.max(0, this.ground(p.x, p.y)), s = 1 + NEARER * h;
+      p = { x: c.x + (x - c.x) / s, y: c.y + (y + LIFT * h - c.y) / s };
+    }
+    return p;
+  }
+
   /** Pick the gecko up at (x, y), gripping the nearest spine point. */
   grab(x: number, y: number) {
     let best = 0, bd = Infinity;
@@ -318,9 +339,11 @@ export class Body {
     for (const leg of this.legs) { leg.lift = 0; leg.swinging = false; leg.syncCycle(this.gaitPhase); }
   }
 
-  /** Height of a foot: on the ground, raised while it swings, dangling when held. */
+  /** Height of a foot: on the ground, raised while it swings or reaches, dangling when held. */
   footZ(leg: Leg) {
-    return this.held ? this.z[leg.def.seg] : this.ground(leg.foot.x, leg.foot.y) + leg.lift * 1.5;
+    if (this.held) return this.z[leg.def.seg];
+    const raised = leg === this.reacher && this.reach ? this.reach.z * this.reach.k : 0;
+    return this.ground(leg.foot.x, leg.foot.y) + leg.lift * 1.5 + raised;
   }
 
   update(dt: number, drive: Drive) {
@@ -437,6 +460,7 @@ export class Body {
     // ── Legs ────────────────────────────────────────────────
     this.placeLegs(false, dt);
     if (this.dangle.front > 0 || this.dangle.hind > 0) this.dangleLegs();
+    this.reachOut();
     this.lifeSignals(dt);
   }
 
@@ -460,6 +484,20 @@ export class Body {
       const bend = leg.def.front ? 0.8 : -0.8;
       leg.knee = { x: lerp(leg.knee.x, (leg.hip.x + fx) / 2 + f.x * bend, k), y: lerp(leg.knee.y, (leg.hip.y + fy) / 2 + f.y * bend, k) };
     }
+  }
+
+  private reachOut() {
+    const r = this.reach;
+    if (!r || r.k <= 0) { this.reacher = null; return; }
+    const d = (l: Leg) => Math.hypot(l.hip.x - r.x, l.hip.y - r.y);
+    this.reacher ??= this.legs.filter((l) => l.def.front).reduce((a, l) => (d(l) < d(a) ? l : a));
+    const leg = this.reacher;
+    leg.swinging = false;
+    leg.lift = 0;
+    const at = this.unproject(r.x, r.y);
+    leg.foot.x = lerp(leg.foot.x, at.x, r.k);
+    leg.foot.y = lerp(leg.foot.y, at.y, r.k);
+    leg.knee = this.solveKnee(leg, leg.hip);
   }
 
   /** Dangling from the user's grip: squirming, legs paddling, lifted high. */

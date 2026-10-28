@@ -1,4 +1,4 @@
-import { Body, Drive, HIP as HIP_SEG, NEARER, TAIL_FIRST } from './body';
+import { Body, Drive, HIP as HIP_SEG, NEARER, Pt, TAIL_FIRST, TORSO_FIRST } from './body';
 import type { Bug, Particles, Swarm } from './bugs';
 import type { InputTracker } from './input';
 import { Rect, angleDiff, clamp, lerp, rand, smoothstep } from './math';
@@ -50,6 +50,16 @@ const CURIOUS_RADIUS = 170;
 const STALK_RADIUS = 55;
 /** Hiding under the side panels is switched off for now; the code stays for later. */
 const HIDING = false;
+/** A prank's button sits this far ahead of its shoulder and out to the side (art px)... */
+const PRANK_AHEAD = 2.5, PRANK_OUT = 5;
+/** ...and the hand is raised this high above it before it comes down (art px). */
+const PRANK_RAISE = 7;
+/** Minutes between pranks, at random within this range, unless the settings say otherwise. */
+const MISCHIEF_MINUTES: [number, number] = [8, 20];
+/** Once it's fast asleep, it sleeps at least this long (ticks) before waking by itself. */
+const MIN_SLEEP = 600;
+/** Ticks between asking for food at the pet panel: 3 to 7 minutes. */
+const SNACK_EVERY = [3 * 3600, 7 * 3600];
 const dist = (x1: number, y1: number, x2: number, y2: number) => Math.hypot(x2 - x1, y2 - y1);
 const lerpAngle = (a: number, b: number, t: number) => a + angleDiff(a, b) * t;
 
@@ -58,6 +68,12 @@ export interface BrainOptions {
   sleepAfterMs: number;
   reducedMotion: boolean;
   traits?: Traits;
+  /** A nudge to its rolled nature, or 'own' for none. */
+  temperament?: Temperament;
+  /** Harmless pranks on the workspace's buttons. */
+  mischief?: boolean;
+  /** How many minutes between pranks: at random, between these two. */
+  mischiefMinutes?: [number, number];
 }
 
 export interface Ctx {
@@ -76,6 +92,32 @@ export interface Ctx {
   pointerSpeed: number;
   /** The nodes of an open graph view, to play with (art px), when there is one. */
   graph?: Playground | null;
+  /** Buttons on screen it could press. */
+  pranks?: Pranks | null;
+}
+
+/**
+ * A button on screen it could press (art px): where to press it, and what pressing it
+ * does. 'food' asks for something to eat, which it does when it's hungry; 'mischief' is
+ * a prank, only when it's allowed to be mischievous.
+ */
+export interface PrankTarget {
+  id: string;
+  kind: 'food' | 'mischief';
+  x: number;
+  y: number;
+  /** Still there to be pressed? */
+  ok(): boolean;
+  /** Its hand is over the button: the button shows its hover state, as for a pointer. */
+  hover(on: boolean): void;
+  /** Pressed down (true), and let go (false): the button shows it pressed. */
+  down(on: boolean): void;
+  /** Let go of, the press complete: whatever the button does. */
+  press(): void;
+}
+export interface Pranks {
+  /** What it could press now; a prank it owes putting right comes first, marked `due`. */
+  targets(): (PrankTarget & { due?: boolean })[];
 }
 
 /** A node of the graph view, as a ball to play with (art px). */
@@ -99,6 +141,24 @@ export type Traits = Record<'speed' | 'aggression' | 'awareness' | 'endurance' |
 export function rollTraits(): Traits {
   const r = () => 0.3 + Math.random() * 0.4;
   return { speed: r(), aggression: r(), awareness: r(), endurance: r(), metabolism: r() };
+}
+
+/**
+ * Temperaments pull particular traits most of the way to a value, after the budget, so
+ * the rest of the gecko's own nature still shows through. Lazy: slow, drowsy, unbothered
+ * by food. Energetic: quick and tireless. Bold: a fierce hunter that doesn't spook.
+ */
+export type Temperament = 'own' | 'lazy' | 'energetic' | 'bold';
+const TEMPERAMENTS: Record<Exclude<Temperament, 'own'>, Partial<Traits>> = {
+  lazy: { speed: 0.15, endurance: 0.1, aggression: 0.25, metabolism: 0.3 },
+  energetic: { speed: 0.9, endurance: 0.9, metabolism: 0.7, aggression: 0.55 },
+  bold: { aggression: 0.95, awareness: 0.25, speed: 0.6 },
+};
+const TEMPER_PULL = 0.75;
+
+/** Its traits as they act (0..1 each), budget and temperament applied. */
+export function natureOf(raw: Traits, temperament: Temperament = 'own'): Traits {
+  return new TraitEngine(raw, TRAIT_BUDGET, temperament).traits as Traits;
 }
 
 const Curves: Record<string, (t: number) => number> = {
@@ -139,11 +199,12 @@ class TraitEngine {
   drives: Record<string, number> = { hunger: 0, fullness: 0, sleepiness: 0 };
   private byOutput: Record<string, { from: string; curve: string; range: [number, number] }[]> = {};
 
-  constructor(raw: Traits, budget: number) {
+  constructor(raw: Traits, budget: number, temperament: Temperament = 'own') {
     const entries = Object.entries(raw);
     const sum = entries.reduce((a, [, v]) => a + v, 0);
     const scale = sum > 0 ? budget / sum : 1;
     for (const [k, v] of entries) this.traits[k] = clamp(v * scale, 0, 1);
+    if (temperament !== 'own') for (const [k, v] of Object.entries(TEMPERAMENTS[temperament])) this.traits[k] = lerp(this.traits[k] ?? 0.5, v, TEMPER_PULL);
     for (const [key, config] of Object.entries(INFLUENCE_MAP)) {
       const [from, to] = key.split(' → ');
       (this.byOutput[to] ??= []).push({ from, curve: config.curve, range: config.range });
@@ -189,13 +250,14 @@ export const STATE = {
   RETREAT: 'retreat',
   PLAY: 'play',
   NAP: 'nap',
+  PRANK: 'prank',
 } as const;
 export type State = (typeof STATE)[keyof typeof STATE];
 
 class Needs {
   hunger = 50;
   sleepiness = 0;
-  constructor(private engine: TraitEngine) {}
+  constructor(public engine: TraitEngine) {}
 
   get hungerFactor() { return clamp(1 - this.hunger / 100, 0, 1); }
   get fullness() { return this.hunger / 100; }
@@ -271,6 +333,8 @@ const StateHandlers: Record<State, Handler> = {
         if (g.wantsCover()) return { targetSpeed: 0.05 * S, transition: STATE.HIDE };
         if (g.wantsToPlay()) return { targetSpeed: 0.05 * S, transition: STATE.PLAY };
         if (g.wantsNap()) return { targetSpeed: 0.05 * S, transition: STATE.NAP };
+        if (g.wantsSnack()) return { targetSpeed: 0.05 * S, transition: STATE.PRANK };
+        if (g.wantsMischief()) return { targetSpeed: 0.05 * S, transition: STATE.PRANK };
         const nearHome = homeDist < 80 * S;
         const r = Math.random();
         if (nearHome && g.needs.fullness > 0.6 && r < g.needs.fullness) return { targetSpeed: 0.05 * S, transition: STATE.BASKING };
@@ -480,20 +544,24 @@ const StateHandlers: Record<State, Handler> = {
     enter(g) {
       g.body.curlStyle = 'coil';
       const baseSleep = g.traits.resolve('sleepDuration');
-      g.stateData = { duration: baseSleep + Math.random() * baseSleep * 1.3, nextPeekTime: 60 + Math.random() * 100, peekUntil: 0, wakeAt: 0 };
+      g.stateData = { duration: baseSleep + Math.random() * baseSleep * 1.3, nextPeekTime: 60 + Math.random() * 100, peekUntil: 0, wakeAt: 0, asleepAt: 0 };
       g.sleepPeeking = false;
       g.body.curlDir = Math.random() > 0.5 ? 1 : -1;
     },
     update(g) {
       const t = g.stateTimer, sd = g.stateData;
-      // Now and then it peeks out from under its lids.
-      if (t > sd.nextPeekTime) {
+      // Now and then it peeks out from under its lids (not while it's dropping off).
+      if (sd.asleepAt && t - sd.asleepAt > 300 && t > sd.nextPeekTime) {
         g.sleepPeeking = true;
         sd.peekUntil = t + 36 + Math.random() * 24;
         sd.nextPeekTime = t + 80 + Math.random() * 150;
         if (Math.random() < 0.5) g.headLook.look();
       }
       if (g.sleepPeeking && t > sd.peekUntil) g.sleepPeeking = false;
+      // Curled up with its eyes shut, it's asleep: and once it is, it stays asleep a good
+      // while (a pointer coming at it still wakes it with a start).
+      if (!sd.asleepAt && (g.dozing || t > 240)) sd.asleepAt = t;
+      if (!sd.asleepAt || t - sd.asleepAt < MIN_SLEEP) return { targetSpeed: 0 };
       // While you're away it stays asleep; when you come back it wakes shortly after.
       if (g.userIdle) { sd.duration = Math.max(sd.duration, t + 60); g.needs.sleepiness = Math.max(g.needs.sleepiness, 0.5); sd.wakeAt = 0; }
       else if (g.forcedNap) {
@@ -906,6 +974,95 @@ const StateHandlers: Record<State, Handler> = {
   // side-on — the same body, in 3-D — and it lies down along the top, an arm and a leg
   // slipping over the edge, the tail drooping over the end, eyes closing; Z's. A pointer
   // moving close by wakes it, and it steps out of the pose and walks off.
+  // Pressing a button on screen: the pet panel's "Have something to eat" when it's hungry,
+  // or, being mischievous, a sidebar toggle. It walks up beside it, rears up and raises a
+  // hand high over it (the button lights up as if hovered), holds it there a dramatic
+  // moment, trembling, and brings it down: the button goes down, and comes up as it lets
+  // go. After a prank it scampers off, pleased with itself; after asking for food, it
+  // waits for what turns up.
+  [STATE.PRANK]: {
+    enter(g) {
+      const t = g.prankTarget!, b = g.body, head = g.head, W = g.c.world.bounds;
+      // Facing the button from the middle of the window, so its tail lies back inward.
+      let hx = t.x - (W.x + W.w / 2), hy = t.y - (W.y + W.h / 2);
+      const hl = Math.hypot(hx, hy) || 1; hx /= hl; hy /= hl;
+      const neck = dist(head.x, head.y, b.pts[TORSO_FIRST].x, b.pts[TORSO_FIRST].y), mid = dist(head.x, head.y, b.pts[12].x, b.pts[12].y);
+      // The button a little ahead and off to one side of its shoulder, within an arm's
+      // reach: where its head ends up, standing so, with the button `on` the terrain there.
+      const stand = (on: Pt, side: number) => {
+        const lx = hy * side, ly = -hx * side;
+        const sx = on.x - hx * PRANK_AHEAD - lx * PRANK_OUT, sy = on.y - hy * PRANK_AHEAD - ly * PRANK_OUT;
+        const end = { x: sx + hx * neck, y: sy + hy * neck };
+        const room = Math.min(end.x - W.x, W.x + W.w - end.x, end.y - W.y, W.y + W.h - end.y, sx - W.x, W.x + W.w - sx, sy - W.y, W.y + W.h - sy);
+        // Up the screen from its shoulder if it can, so the raised hand stands clear of its
+        // body rather than in front of it; otherwise further from the window's edges.
+        return { end, score: room + (ly < 0 && room > 6 ? 1000 : 0) };
+      };
+      // The button is drawn at (t.x, t.y). On raised terrain that's a little down the page
+      // from it, and nearer the body's middle (see Body.project): plan around the button,
+      // then again around where its middle will be.
+      const first = b.unproject(t.x, t.y, t);
+      const side = stand(first, 1).score >= stand(first, -1).score ? 1 : -1;
+      const rough = stand(first, side).end;
+      const best = stand(b.unproject(t.x, t.y, { x: rough.x - hx * mid, y: rough.y - hy * mid }), side);
+      const end = best.end, spot = { x: end.x - hx * 26, y: end.y - hy * 26 };
+      g.stateData = { phase: 'go', target: t, at: { x: t.x, y: t.y }, h: { x: hx, y: hy }, spot, end, t: 0 };
+      g.planRoute(spot.x, spot.y);
+    },
+    update(g) {
+      const sd = g.stateData, b = g.body, head = g.head, t: PrankTarget = sd.target;
+      sd.t++;
+      const ease = (a: number, d: number) => smoothstep(clamp((sd.t - a) / d, 0, 1));
+      const facing = Math.atan2(sd.h.y, sd.h.x);
+      if ((sd.phase === 'go' || sd.phase === 'line') && !t.ok()) return { targetSpeed: 0, transition: STATE.IDLE };
+      switch (sd.phase) {
+        case 'go': {
+          if (g.arrived(sd)) { sd.phase = 'line'; sd.t = 0; }
+          else if (sd.t > 2400) return { targetSpeed: 0, transition: STATE.IDLE };
+          const wp = g.waypoint(sd.spot.x, sd.spot.y);
+          g.targetAngle = Math.atan2(wp.y - head.y, wp.x - head.x);
+          return { targetSpeed: g.speed * 0.8 };
+        }
+        case 'line': {
+          // Creeping up the last bit, lined up on it, slowing to a stop right on the spot.
+          const left = -((head.x - sd.end.x) * sd.h.x + (head.y - sd.end.y) * sd.h.y);
+          if (left < 0.3 || sd.t > 400) { sd.phase = 'raise'; sd.t = 0; g.currentSpeed = 0; return { targetSpeed: 0 }; }
+          g.targetAngle = Math.atan2(sd.end.y - head.y, sd.end.x - head.x);
+          return { targetSpeed: g.speed * 0.4 * clamp(left / 8, 0.12, 1) };
+        }
+        case 'raise': {
+          g.targetAngle = facing;
+          g.headLook.lookAt(angleDiff(g.angle, Math.atan2(sd.at.y - head.y, sd.at.x - head.x)));
+          // Up on its front legs, the hand raised high over the button...
+          b.pushup = 1.4 * ease(0, 20) * (1 - ease(104, 16));
+          let z = PRANK_RAISE * ease(0, 24);
+          // ...held there, trembling...
+          if (sd.t >= 24 && sd.t < 70) z = PRANK_RAISE + Math.sin(sd.t * 0.9) * 0.6;
+          // ...and down it comes.
+          if (sd.t >= 70) z = PRANK_RAISE * (1 - ease(70, 6));
+          b.reach = { x: sd.at.x, y: sd.at.y, z, k: ease(0, 20) * (1 - ease(100, 18)) };
+          if (sd.t === 12 && t.ok()) { t.hover(true); g.pressing = t; }
+          if (sd.t === 76) {
+            t.down(true);
+            if (t.kind === 'food') g.snackCooldown = SNACK_EVERY[0] + Math.random() * (SNACK_EVERY[1] - SNACK_EVERY[0]);
+            else g.mischiefCooldown = g.mischiefGap();
+            g.c.particles.burst(sd.at.x, sd.at.y, g.c.pal.ink, 5, 16);
+          }
+          if (sd.t === 86) { t.down(false); if (t.ok()) t.press(); }
+          if (sd.t === 108) { t.hover(false); g.pressing = null; }
+          if (sd.t >= 120) {
+            b.reach = null; b.pushup = 0;
+            if (t.kind === 'food') return { targetSpeed: 0, transition: STATE.IDLE };
+            g.scamperFrom(sd.at);
+            return { targetSpeed: g.speed };
+          }
+          return { targetSpeed: 0 };
+        }
+      }
+      return { targetSpeed: 0 };
+    },
+  },
+
   [STATE.NAP]: {
     enter(g) {
       const r = g.napRock!, h = g.head;
@@ -993,9 +1150,10 @@ const StateHandlers: Record<State, Handler> = {
       // Settling or asleep. The block scrolled away or the note changed under it: up.
       if (!g.c.world.rockAt(b.pts[12].x, sd.ledge + 2)) return { targetSpeed: 0, transition: STATE.IDLE };
       if (g.userIdle) sd.sleepFor = Math.max(sd.sleepFor, sd.t + 60);
-      // A pointer moving about close by wakes it; one already resting there doesn't.
-      const p = g.pointer;
-      if ((p && g.cursorSpeed > 0.3 && g.bodyDistance(p.x, p.y) < 18) || (sd.phase === 'asleep' && sd.t > sd.sleepFor)) {
+      // A pointer moving about close by wakes it; one already resting there doesn't. Just
+      // dropping off, it takes a pointer brushing quickly past to rouse it.
+      const p = g.pointer, drowsy = sd.phase === 'settle' || sd.t < MIN_SLEEP;
+      if ((p && g.cursorSpeed > (drowsy ? 2 : 0.3) && g.bodyDistance(p.x, p.y) < 18) || (sd.phase === 'asleep' && sd.t > sd.sleepFor)) {
         if (sd.phase === 'asleep') g.needs.sleepiness = Math.max(0, g.needs.sleepiness - 0.5);
         sd.phase = 'wake'; sd.t = 0;
       }
@@ -1149,7 +1307,7 @@ const NIBBLE_FIRST: [number, number] = [60, 120];
 const NIBBLE_EVERY: [number, number] = [150, 330];
 
 export class Personality {
-  readonly traits: TraitEngine;
+  traits: TraitEngine;
   readonly needs: Needs;
   angle: number;
   targetAngle: number;
@@ -1194,6 +1352,54 @@ export class Personality {
   retreatOut: { x: number; y: number } | null = null;
   /** Ticks until it will start another game with the graph. */
   playCooldown = 0;
+  /** Not up to anything for this many ticks yet (a little under the usual gap, to begin with). */
+  mischiefCooldown: number;
+
+  /** Ticks until the next prank, at random within the range the settings ask for. */
+  mischiefGap() {
+    const [lo, hi] = this.c.opts.mischiefMinutes ?? MISCHIEF_MINUTES;
+    return (lo + Math.random() * (hi - lo)) * 3600;
+  }
+  /** The button it's off to press. */
+  prankTarget: PrankTarget | null = null;
+  /** The button its hand is over, showing hovered (or pressed), until it's done with it. */
+  pressing: PrankTarget | null = null;
+  /** Ticks before it asks for food again. */
+  snackCooldown = SNACK_EVERY[0] * 0.5;
+
+  /** Hungry, nothing to hunt, and a button for food on screen (into prankTarget)? */
+  wantsSnack() {
+    if (this.snackCooldown > 0 || this.needs.hungerFactor < 0.45 || this.c.swarm.bugs.length || this.typing) return false;
+    const food = this.c.pranks?.targets().find((t) => t.kind === 'food');
+    if (!food || Math.random() > 0.6) return false;
+    this.prankTarget = food;
+    return true;
+  }
+
+  /** Feeling mischievous, with a prank to play (into prankTarget)? Never while you're typing. */
+  wantsMischief() {
+    const p = this.c.pranks;
+    if (!this.c.opts.mischief || !p || this.c.input.typedWithin(this.c.now, 15000)) return false;
+    const ts = p.targets().filter((t) => t.kind === 'mischief'), due = ts.find((t) => t.due);
+    if (due) { this.prankTarget = due; return true; }
+    if (this.mischiefCooldown > 0 || !ts.length || Math.random() > 0.5) return false;
+    this.prankTarget = ts[Math.floor(Math.random() * ts.length)];
+    return true;
+  }
+
+  /** Off it goes after a prank, at a scamper rather than in a fright. */
+  scamperFrom(p: { x: number; y: number }) {
+    this.threatX = p.x;
+    this.threatY = p.y;
+    this.mildScare = true;
+    this.enterState(STATE.FLEE);
+  }
+
+  /** A new nature: rolled traits, or a different temperament, from the settings. */
+  setNature(traits: Traits, temperament: Temperament = 'own') {
+    this.traits = new TraitEngine(traits, TRAIT_BUDGET, temperament);
+    this.needs.engine = this.traits;
+  }
   /** Napping on a block: the view turned over about its edge, and how far (see GeckoRenderer.tilt). */
   get napTilt(): { pivot: number; amount: number; end: number; face: 1 | -1; stand: number; droop: number } | null {
     const sd = this.stateData;
@@ -1202,7 +1408,7 @@ export class Personality {
 
   /** Fast asleep, curled up with its eyes shut: the Z's come out. */
   get dozing() {
-    return (this.body.curl > 0.9 && this.body.lid > 0.9 && this.state === STATE.SLEEP && !this.sleepPeeking) || (this.state === STATE.NAP && this.stateData.phase === 'asleep' && this.stateData.t > 45);
+    return (this.body.curl > 0.6 && this.body.lid > 0.9 && this.state === STATE.SLEEP && !this.sleepPeeking) || (this.state === STATE.NAP && this.stateData.phase === 'asleep' && this.stateData.t > 45);
   }
 
   /** The block it means to nap on. */
@@ -1298,12 +1504,13 @@ export class Personality {
   private trackIn = 0;
 
   constructor(readonly c: Ctx, entering: boolean) {
-    this.traits = new TraitEngine(c.opts.traits ?? rollTraits(), TRAIT_BUDGET);
+    this.traits = new TraitEngine(c.opts.traits ?? rollTraits(), TRAIT_BUDGET, c.opts.temperament);
     this.needs = new Needs(this.traits);
     this.angle = this.targetAngle = c.body.heading;
     this.speed = this.traits.resolve('baseSpeed') * S;
     this.entering = entering;
     this.nextNibble = c.now + rand(...NIBBLE_FIRST) * 1000;
+    this.mischiefCooldown = this.mischiefGap() * 0.4;
     this.chooseHome();
     if (entering) {
       this.enterState(STATE.EXPLORE);
@@ -1748,6 +1955,7 @@ export class Personality {
       case STATE.SCOUT: return 'Exploring the note';
       case STATE.RETREAT: return 'Lying low on the side panel';
       case STATE.PLAY: return 'Playing';
+      case STATE.PRANK: return sd.target?.kind === 'food' ? 'Asking for something to eat' : 'Up to something';
       default: return s;
     }
   }
@@ -1798,6 +2006,13 @@ export class Personality {
         this.nextNibble = 0;
         if (asleep || (this.state !== STATE.IDLE && this.state !== STATE.EXPLORE && this.state !== STATE.BASKING)) this.enterState(STATE.IDLE);
         return null;
+      case 'prank': {
+        const ts = (this.c.pranks?.targets() ?? []).filter((t) => t.kind === 'mischief');
+        if (!ts.length) return 'Nothing to get up to here';
+        this.prankTarget = ts.find((t) => t.due) ?? ts[Math.floor(Math.random() * ts.length)];
+        this.enterState(STATE.PRANK);
+        return null;
+      }
     }
     return null;
   }
@@ -1947,6 +2162,8 @@ export class Personality {
     this.burstTimer++;
     if (this.hideCooldown > 0) this.hideCooldown--;
     if (this.playCooldown > 0) this.playCooldown--;
+    if (this.mischiefCooldown > 0) this.mischiefCooldown--;
+    if (this.snackCooldown > 0) this.snackCooldown--;
     if (this.napCooldown > 0) this.napCooldown--;
     this.typing = c.input.typedWithin(c.now, 3500);
     // A notice goes away by itself after a few seconds; a drag lure is refreshed while it moves.
@@ -2005,12 +2222,17 @@ export class Personality {
     b.lidTarget = sleeping ? (this.sleepPeeking ? 0.25 : 1) : this.state === STATE.NAP && this.stateData.lids ? this.stateData.lids : this.petted ? 0.55 : 0;
     b.breathRate = sleeping || napping || this.state === STATE.BASKING || this.petted ? 0.29 : 0.57;
     b.breathDepth = sleeping ? 0.085 : 0.05;
-    b.tailTwitch = this.state === STATE.HUNT && this.stateData.phase === 'ready' ? 1 : this.state === STATE.PLAY ? 0.8 : this.state === STATE.HELD ? 0.8 : this.state === STATE.LURK && (this.stateData.frozen || this.stateData.phase === 'wary') ? 0.5 : this.state === STATE.NIBBLE && this.stateData.phase === 'grab' && this.stateData.stuck ? 0.6 : this.state === STATE.HUNT ? 0.7 : this.state === STATE.STARTLE ? 0.35 : 0;
+    b.tailTwitch = this.state === STATE.HUNT && this.stateData.phase === 'ready' ? 1 : this.state === STATE.PLAY ? 0.8 : this.state === STATE.PRANK && this.stateData.phase === 'raise' ? 0.6 : this.state === STATE.HELD ? 0.8 : this.state === STATE.LURK && (this.stateData.frozen || this.stateData.phase === 'wary') ? 0.5 : this.state === STATE.NIBBLE && this.stateData.phase === 'grab' && this.stateData.stuck ? 0.6 : this.state === STATE.HUNT ? 0.7 : this.state === STATE.STARTLE ? 0.35 : 0;
     if (this.mouthTicks > 0) { this.mouthTicks--; b.mouthTarget = this.mouthTicks > 4 ? 1 : 0.4; }
     else if (this.state !== STATE.NIBBLE && this.state !== STATE.HUNT && this.state !== STATE.FEAST) b.mouthTarget = 0;
     if (this.state !== STATE.HUNT && this.state !== STATE.PLAY) b.wiggle = 0;
     if (this.state !== STATE.FEAST) b.gulp = -1;
-    if (this.state !== STATE.IDLE && this.state !== STATE.BASKING) { this.display = null; if (this.state !== STATE.NAP && this.state !== STATE.PLAY) b.pushup = 0; }
+    if (this.state !== STATE.IDLE && this.state !== STATE.BASKING) { this.display = null; if (this.state !== STATE.NAP && this.state !== STATE.PLAY && this.state !== STATE.PRANK) b.pushup = 0; }
+    if (this.state !== STATE.PRANK) {
+      b.reach = null;
+      // Off it went mid-press (after a fly, say): the button goes back to normal.
+      if (this.pressing) { this.pressing.down(false); this.pressing.hover(false); this.pressing = null; }
+    }
 
     const slow = clamp(1 - this.currentSpeed / (this.speed || 1), 0, 1);
     return {

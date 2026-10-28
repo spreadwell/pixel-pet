@@ -595,7 +595,9 @@ export class GeckoRenderer {
     if (this.stableLegs) {
       // Hold each joint's pixel until the real joint is clearly over the next one.
       const prev = snaps.get(leg);
-      const hold = (v: number, k: number) => (prev && Math.abs(v - (prev[k] + 0.5)) < 0.9 ? prev[k] : Math.floor(v));
+      // (Not a hand reaching to press something: that goes exactly where it's put.)
+      const sticky = leg !== b.reacher;
+      const hold = (v: number, k: number) => (sticky && prev && Math.abs(v - (prev[k] + 0.5)) < 0.9 ? prev[k] : Math.floor(v));
       const s: Snapped = [hold(hip.x, 0), hold(hip.y, 1), hold(knee.x, 2), hold(knee.y, 3), hold(foot.x, 4), hold(foot.y, 5)];
       snaps.set(leg, s);
       hip = { x: s[0] + 0.5, y: s[1] + 0.5 }; knee = { x: s[2] + 0.5, y: s[3] + 0.5 }; foot = { x: s[4] + 0.5, y: s[5] + 0.5 };

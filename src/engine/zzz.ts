@@ -2,17 +2,19 @@ import type { Palette } from './palette';
 
 /*
  * The Z's of a sleeping gecko, rising from its head, growing and fading. They're drawn on
- * their own canvas on a finer grid than the gecko — each square one CSS pixel rather than
- * one of the gecko's — so they can be small and still crisp and legible.
+ * their own canvas on a somewhat finer grid than the gecko — each square two-thirds the
+ * size of one of its pixels — so they can be small and still legible, and still pixel art.
  */
 
 const Z_EVERY = 1.6, Z_LIFE = 2.8;
 /** Smallest to largest, as each one rises. */
 const GLYPHS = [
+  ['####', '..#.', '.#..', '####'],
   ['#####', '...#.', '..#..', '.#...', '#####'],
   ['######', '....#.', '...#..', '..#...', '.#....', '######'],
-  ['#######', '.....#.', '....#..', '...#...', '..#....', '.#.....', '#######'],
 ];
+/** A square of a Z, as a share of one of the gecko's pixels. */
+const CELL = 2 / 3;
 
 export class Zzz {
   private zs: { born: number; x: number; y: number }[] = [];
@@ -39,8 +41,11 @@ export class Zzz {
     this.canvas.style.height = `${h}px`;
   }
 
-  /** Draw (and, while asleep, keep sending up) Z's from `head` (CSS px), or let them fade out. */
-  draw(pal: Palette, head: { x: number; y: number } | null, now: number) {
+  /**
+   * Draw (and, while asleep, keep sending up) Z's from `head` (CSS px), or let them fade
+   * out. `px` is the size of one of the gecko's pixels, CSS px.
+   */
+  draw(pal: Palette, head: { x: number; y: number } | null, now: number, px: number) {
     const t = now / 1000;
     if (head && t - this.lastZ > Z_EVERY) { this.lastZ = t; this.zs.push({ born: t, x: head.x + 4, y: head.y - 8 }); }
     this.zs = this.zs.filter((z) => t - z.born < Z_LIFE);
@@ -49,8 +54,8 @@ export class Zzz {
       if (this.drawn) { g.clearRect(0, 0, this.canvas.width, this.canvas.height); this.drawn = false; }
       return;
     }
-    // Squares of a whole number of device pixels, about one CSS pixel each.
-    const dpr = this.win.devicePixelRatio || 1, cell = Math.max(1, Math.round(dpr));
+    // Squares of a whole number of device pixels.
+    const dpr = this.win.devicePixelRatio || 1, cell = Math.max(1, Math.round(px * CELL * dpr));
     g.clearRect(0, 0, this.canvas.width, this.canvas.height);
     g.fillStyle = pal.ink;
     for (const z of this.zs) {

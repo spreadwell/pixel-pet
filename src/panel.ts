@@ -15,6 +15,7 @@ const ACTIONS: [string, string, string][] = [
   ['bask', 'Bask', 'sun-medium'],
   ['pushups', 'Do push-ups', 'dumbbell'],
   ['play', 'Play with the graph', 'git-fork'],
+  ['prank', 'Cause mischief', 'sparkles'],
 ];
 
 /**
@@ -43,7 +44,7 @@ export class PetPanel extends ItemView {
     this.status = head.createSpan({ text: '…' });
     const list = root.createDiv({ cls: 'pixel-pet-panel-actions' });
     for (const [cmd, label, icon] of ACTIONS) {
-      const button = list.createEl('button', { cls: 'pixel-pet-panel-action' });
+      const button = list.createEl('button', { cls: 'pixel-pet-panel-action', attr: { 'data-cmd': cmd } });
       setIcon(button.createSpan({ cls: 'pixel-pet-panel-icon' }), icon);
       button.createSpan({ text: label });
       button.addEventListener('click', () => this.run(cmd));

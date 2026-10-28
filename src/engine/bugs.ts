@@ -3,6 +3,11 @@ import type { Palette } from './palette';
 import { TAU, angleDiff, chance, clamp, noise1, rand } from './math';
 
 export type BugKind = 'fly' | 'cricket';
+export const BUG_KINDS: BugKind[] = ['fly', 'cricket'];
+/** How busy a kind of bug is: lazy ones dawdle and linger, quick ones dart about and leave sooner. */
+export type Pace = 'lazy' | 'normal' | 'quick' | 'mixed';
+const PACE = { lazy: 0.6, normal: 1, quick: 1.5 };
+export const paceFactor = (p: Pace) => p === 'mixed' ? [PACE.lazy, PACE.normal, PACE.quick][Math.floor(Math.random() * 3)] : PACE[p];
 type BugState = 'flying' | 'landed' | 'hopping' | 'resting' | 'leaving';
 
 export class Bug {
@@ -16,6 +21,8 @@ export class Bug {
   life = rand(50, 100);
   alive = true;
   seed = Math.floor(rand(0, 1e5));
+  /** Its own clock runs this much faster than real time (see Pace). */
+  pace = 1;
   /** Hop endpoints (crickets). */
   private hop = { x0: 0, y0: 0, x1: 0, y1: 0, t: 0, dur: 0.3 };
   private aim: { x: number; y: number };
@@ -229,7 +236,7 @@ export class Swarm {
   update(dt: number, world: World, predator?: { x: number; y: number }) {
     for (const b of this.bugs) {
       b.threat = predator ? Math.hypot(b.x - predator.x, b.y - predator.y) : Infinity;
-      b.update(dt, world);
+      b.update(dt * b.pace, world);
     }
     this.bugs = this.bugs.filter((b) => b.alive);
   }

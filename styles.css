@@ -86,3 +86,54 @@ body.pixel-pet-holding * {
   z-index: calc(var(--layer-popover, 30) - 1);
   image-rendering: pixelated;
 }
+
+/* Settings pages: an icon before each page's name, and (before Obsidian 1.13, where the
+   pages are drawn in place) a chevron on each link and a back button over each page. */
+.pixel-pet-page-icon {
+  display: inline-flex;
+  margin-right: var(--size-4-2);
+  color: var(--text-muted);
+  vertical-align: -3px;
+}
+.pixel-pet-page-icon .svg-icon {
+  width: var(--icon-s);
+  height: var(--icon-s);
+}
+.pixel-pet-page-link {
+  cursor: pointer;
+}
+.pixel-pet-page-chevron {
+  display: flex;
+  color: var(--text-faint);
+}
+.pixel-pet-page-header {
+  display: flex;
+  align-items: center;
+  gap: var(--size-4-2);
+  padding-bottom: var(--size-4-3);
+}
+.pixel-pet-page-title {
+  font-size: var(--font-ui-large);
+  font-weight: var(--font-semibold);
+}
+
+/* A button the pet's hand is over shows hovered, and goes down as it presses it, as it
+   does for a pointer. (The panel's buttons go down for a pointer's click too.) */
+.pixel-pet-panel-action {
+  transition: transform 70ms ease-out, background-color 120ms ease;
+}
+.pixel-pet-panel-action.pixel-pet-hover {
+  background-color: var(--interactive-hover);
+}
+.pixel-pet-panel-action:active,
+.pixel-pet-panel-action.pixel-pet-down {
+  transform: translateY(1px) scale(0.97);
+}
+.clickable-icon.pixel-pet-hover {
+  background-color: var(--background-modifier-hover);
+  color: var(--icon-color-hover);
+}
+.clickable-icon.pixel-pet-down {
+  transform: scale(0.9);
+  transition: transform 70ms ease-out;
+}

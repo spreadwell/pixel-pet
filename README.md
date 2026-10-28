@@ -10,19 +10,25 @@ It notices what happens in Obsidian: open the command palette or a dialog and it
 
 Rest your pointer somewhere nearby and it takes an interest: it turns to look, drifts closer, and ends up watching it from a wary distance, as it does your caret while you type. Move at it too fast and it freezes, then bolts. Out in the margins, bring the pointer to it slowly and hold it still on it to pet it. On or next to your text, though, a pointer coming near always sends it scurrying clear of the words, so it is never in the way of a click. Now and then, at rest, it does a few slow push-ups. When it's sleepy it may stretch out along the top of a code block or callout for a nap: as it settles, the view turns over to nearly side-on, its tail drapes over the edge, and Z's drift up until your pointer wakes it. When you've been away for a while, it heads home, stretches out and sleeps.
 
-Writing brings it food. Every few dozen words a fly drifts in from the edge of the window. Turn on crickets in settings and finishing a task brings one out too. It spots them from most of the window away and comes over to hunt them; a hungry gecko hunts harder; a full one would rather bask. It stalks, freezes and winds up with its tail lashing and hips wiggling, then strikes in a burst. Catch one and it snaps its jaws shut, gives it a shake, chews, and you can see the lump go down before it licks its lips. It doesn't always catch them.
+Writing brings it food. Every few dozen words a fly drifts in from the edge of the window, toward where you're typing. Turn on crickets in settings and finishing a task brings one out too. Each kind of bug has its own settings: what brings it out (your writing, finished tasks, or now and then of its own accord) and how busy it is, from lazy to quick. It spots them from most of the window away and comes over to hunt them; a hungry gecko hunts harder; a full one would rather bask. It stalks, freezes and winds up with its tail lashing and hips wiggling, then strikes in a burst. Catch one and it snaps its jaws shut, gives it a shake, chews, and you can see the lump go down before it licks its lips. It doesn't always catch them.
+
+With the pet panel open, a hungry gecko with nothing to hunt walks over and asks for food itself: it rears up, raises a hand high over "Have something to eat", holds it there a dramatic moment and brings it down, and the button lights up and clicks down under its hand like it would for your pointer.
+
+Turn on **Mischievous** and once in a while it gets up to something it shouldn't, pressing a sidebar toggle the same way and scampering off. It's harmless, never while you're typing, and a sidebar it opens or closes it puts back after a while. You choose how often, from rarely (every 20–40 minutes) to very often (every few minutes).
 
 Now and then it tastes a word with its tongue, plucks a letter out of it and scurries off somewhere quiet to eat it. **Only the display changes. Your note is never modified.** The eaten letter stays faintly visible, so your text is still readable, and fills back in over half a minute.
 
 ## Details
 
+- Settings are in four pages: General, Personality, Critters, and Help & feedback.
+- Its personality is rolled when it's born. You can nudge it toward lazy, energetic or bold, or give it a whole new one.
 - It takes on your accent color by default, or you can choose your own.
 - It stays out of the way while you type and never sits on the line you're writing.
 - It never blocks clicks: the pet lives on a click-through layer that sits below menus, popovers and modals.
 - It pauses completely when Obsidian is hidden and runs at a few frames per second while asleep.
 - Reduced motion is respected, following your system setting unless you override it.
 
-Show or hide it from the ribbon (paw icon) or the command palette. The palette also has **Call the pet over**, **Release a bug** and **Open pet panel**: an optional side panel that shows what the pet is up to and lets you ask it to come over, find a place to sleep, wake up, go exploring, explore the note you're on, have something to eat, steal a letter, bask, do push-ups, or play with the graph.
+Show or hide it from the ribbon (paw icon) or the command palette. The palette also has **Call the pet over**, **Release a bug** and **Open pet panel**: an optional side panel that shows what the pet is up to and lets you ask it to come over, find a place to sleep, wake up, go exploring, explore the note you're on, have something to eat, steal a letter, bask, do push-ups, play with the graph, or cause some mischief (whether or not Mischievous is on).
 
 Works on desktop and mobile. On touch screens, tap near it to get its attention, hold a finger on it to pet it, and tap it directly to make it dart away.
 

@@ -1,9 +1,11 @@
 import { Editor, MarkdownFileInfo, MarkdownView, Platform, Plugin, TFile } from 'obsidian';
 import { PetEngine, PetOptions } from './engine/engine';
+import { BUG_KINDS, BugKind } from './engine/bugs';
 import { rollTraits } from './engine/personality';
 import { GraphBalls } from './graph';
 import { PANEL_VIEW, PetPanel } from './panel';
-import { PixelPetSettingTab, DEFAULT_SETTINGS, PetSettings } from './settings';
+import { WorkspacePranks } from './pranks';
+import { MISCHIEF_MINUTES, PixelPetSettingTab, DEFAULT_SETTINGS, PetSettings, settingsFrom } from './settings';
 
 const WORD = /[\p{L}\p{N}]+/gu;
 const DONE_TASK = /^\s*(?:[-*+]|\d+[.)])\s+\[[xX]\]/gm;
@@ -12,9 +14,13 @@ export default class PixelPetPlugin extends Plugin {
   settings: PetSettings = { ...DEFAULT_SETTINGS };
   private engine: PetEngine | null = null;
   private counts = new Map<string, { words: number; tasks: number }>();
-  private wordBank = 0;
+  /** Words written toward each kind of bug's next one. */
+  private wordBank: Record<BugKind, number> = { fly: 0, cricket: 0 };
+  /** When each kind of bug next turns up of its own accord (ms). */
+  private nextAlone: Partial<Record<BugKind, { at: number; minutes: number }>> = {};
   private pending = new Map<string, number>();
   private graph = new GraphBalls(this.app);
+  private pranks = new WorkspacePranks(this.app, () => BUG_KINDS.some((k) => this.settings.critters[k].enabled));
 
   async onload() {
     await this.loadSettings();
@@ -23,7 +29,10 @@ export default class PixelPetPlugin extends Plugin {
     this.addRibbonIcon('paw-print', 'Toggle pet', () => this.toggle());
     this.addCommand({ id: 'toggle', name: 'Show or hide the pet', callback: () => this.toggle() });
     this.addCommand({ id: 'summon', name: 'Call the pet over', callback: () => this.engine?.summon() });
-    this.addCommand({ id: 'release-bug', name: 'Release a bug', callback: () => this.engine?.spawnBug(this.settings.crickets && Math.random() < 0.4 ? 'cricket' : 'fly') });
+    this.addCommand({ id: 'release-bug', name: 'Release a bug', callback: () => {
+      const kinds = BUG_KINDS.filter((k) => this.settings.critters[k].enabled);
+      if (kinds.length) this.engine?.spawnBug(kinds[Math.floor(Math.random() * kinds.length)]);
+    } });
     this.registerView(PANEL_VIEW, (leaf) => new PetPanel(leaf, () => this.engine));
     this.addCommand({ id: 'open-panel', name: 'Open pet panel', callback: () => this.openPanel() });
 
@@ -34,6 +43,7 @@ export default class PixelPetPlugin extends Plugin {
     // Editors that don't raise editor-change (Butter Editor, say) still save the note.
     this.registerEvent(this.app.vault.on('modify', (file) => { if (file instanceof TFile && file.extension === 'md') this.onSaved(file); }));
     this.register(() => { for (const t of this.pending.values()) window.clearTimeout(t); });
+    this.registerInterval(window.setInterval(() => this.bugsOnTheirOwn(), 5000));
 
     this.app.workspace.onLayoutReady(() => { if (this.settings.enabled) this.start(); });
   }
@@ -43,12 +53,18 @@ export default class PixelPetPlugin extends Plugin {
   }
 
   async loadSettings() {
-    this.settings = { ...DEFAULT_SETTINGS, ...(await this.loadData()) };
+    this.settings = settingsFrom(await this.loadData());
     // Every gecko gets its own personality the first time, and keeps it.
     if (!this.settings.traits) {
       this.settings.traits = rollTraits();
       await this.saveData(this.settings);
     }
+  }
+
+  /** A whole new personality, rolled afresh. */
+  async newPersonality() {
+    this.settings.traits = rollTraits();
+    await this.saveSettings();
   }
 
   async saveSettings() {
@@ -65,11 +81,15 @@ export default class PixelPetPlugin extends Plugin {
       maxFps: Platform.isMobile ? 30 : 0,
       color: s.colorMode === 'accent' ? 'var(--interactive-accent)' : s.customColor,
       traits: s.traits,
+      temperament: s.temperament,
+      mischief: s.mischief,
+      mischiefMinutes: MISCHIEF_MINUTES[s.mischiefOften] ?? MISCHIEF_MINUTES.sometimes,
       nibble: s.nibbleLetters,
-      crickets: s.crickets,
+      critters: s.critters,
       sleepAfterMs: s.sleepAfterMinutes * 60_000,
       reducedMotion: reduced,
       graph: this.graph,
+      pranks: this.pranks,
     };
   }
 
@@ -85,7 +105,7 @@ export default class PixelPetPlugin extends Plugin {
   }
 
   /** Open the pet panel in the right sidebar (or show it, if it's already open). */
-  private async openPanel() {
+  async openPanel() {
     const ws = this.app.workspace;
     let leaf = ws.getLeavesOfType(PANEL_VIEW)[0];
     if (!leaf) {
@@ -137,26 +157,42 @@ export default class PixelPetPlugin extends Plugin {
     }, 1200));
   }
 
-  /** Writing attracts flies; completed tasks bring out crickets, if they're on. */
+  /** Writing and finished tasks bring out bugs, each kind as its settings say. */
   private feed(key: string, text: string) {
     const words = text.match(WORD)?.length ?? 0;
     const tasks = text.match(DONE_TASK)?.length ?? 0;
     const before = this.counts.get(key);
     this.counts.set(key, { words, tasks });
     if (!before || !this.engine) return;
-    const s = this.settings;
-    if (s.bugsFromWriting && words > before.words) {
-      this.wordBank += words - before.words;
-      let spawned = 0;
-      while (this.wordBank >= s.wordsPerBug && spawned < 2) {
-        this.wordBank -= s.wordsPerBug;
-        this.engine.spawnBug('fly');
-        spawned++;
+    for (const kind of BUG_KINDS) {
+      const c = this.settings.critters[kind];
+      if (!c.enabled) continue;
+      if (c.words > 0 && words > before.words) {
+        this.wordBank[kind] += words - before.words;
+        let spawned = 0;
+        while (this.wordBank[kind] >= c.words && spawned < 2) {
+          this.wordBank[kind] -= c.words;
+          this.engine.spawnBug(kind);
+          spawned++;
+        }
+        this.wordBank[kind] = Math.min(this.wordBank[kind], c.words);
       }
-      this.wordBank = Math.min(this.wordBank, s.wordsPerBug);
+      if (c.tasks && tasks > before.tasks) {
+        for (let i = 0; i < Math.min(2, tasks - before.tasks); i++) this.engine.spawnBug(kind);
+      }
     }
-    if (s.crickets && tasks > before.tasks) {
-      for (let i = 0; i < Math.min(2, tasks - before.tasks); i++) this.engine.spawnBug('cricket');
+  }
+
+  /** Bugs that turn up now and then of their own accord, at a loose rhythm. */
+  private bugsOnTheirOwn() {
+    const now = Date.now();
+    for (const kind of BUG_KINDS) {
+      const c = this.settings.critters[kind];
+      if (!c.enabled || c.minutes <= 0 || !this.engine) { delete this.nextAlone[kind]; continue; }
+      const next = this.nextAlone[kind];
+      if (next && next.minutes === c.minutes && now < next.at) continue;
+      if (next && next.minutes === c.minutes) this.engine.spawnBug(kind);
+      this.nextAlone[kind] = { at: now + c.minutes * 60_000 * (0.6 + Math.random() * 0.8), minutes: c.minutes };
     }
   }
 }
