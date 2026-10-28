@@ -44,6 +44,10 @@ import type { CoverEntry, World } from './world';
 // are in 60 Hz ticks, exactly as in the original.
 
 const S = 0.55;
+/** The pointer catches its eye within this distance (art px)... */
+const CURIOUS_RADIUS = 170;
+/** ...and within this one it stalks it. */
+const STALK_RADIUS = 55;
 /** Hiding under the side panels is switched off for now; the code stays for later. */
 const HIDING = false;
 const dist = (x1: number, y1: number, x2: number, y2: number) => Math.hypot(x2 - x1, y2 - y1);
@@ -168,6 +172,7 @@ export const STATE = {
   WATCH: 'watch',
   INSPECT: 'inspect',
   LURK: 'lurk',
+  CURIOUS: 'curious',
 } as const;
 export type State = (typeof STATE)[keyof typeof STATE];
 
@@ -540,8 +545,8 @@ const StateHandlers: Record<State, Handler> = {
         return { targetSpeed: sd.phaseTimer < 20 ? 0.25 * S : 0 };
       }
 
-      // Too close: startle and scurry back.
-      if (near < 14) {
+      // Too close, or right in the path of the line being written: startle and scurry back.
+      if (near < 20 || (Math.abs(head.y - k.y) < 7 && Math.abs(head.x - k.x) < 40)) {
         sd.phase = 'scurry'; sd.phaseTimer = 0;
         const away = Math.atan2(head.y - k.y, head.x - k.x) + (Math.random() - 0.5) * 0.8;
         sd.spot = w.clampToBounds(head.x + Math.cos(away) * (30 + Math.random() * 20), head.y + Math.sin(away) * (30 + Math.random() * 20), 8);
@@ -566,6 +571,40 @@ const StateHandlers: Record<State, Handler> = {
       if (d > 20) { sd.frozen = false; return { targetSpeed: g.speed }; }
       sd.frozen = sd.phaseTimer % 60 >= 34;
       return { targetSpeed: sd.frozen ? 0 : 0.8 * S };
+    },
+  },
+
+  // The pointer is resting some way off: mild interest. It turns to look, and drifts a
+  // little closer now and then, unhurried; close enough, it starts to stalk it.
+  [STATE.CURIOUS]: {
+    enter(g) { g.stateData = { spot: null, anchor: null, timer: 0, leaveAt: 1200 + Math.random() * 1200, keep: STALK_RADIUS + 12, waited: 0 }; },
+    update(g) {
+      const sd = g.stateData, head = g.head, p = g.pointer, w = g.c.world;
+      sd.timer++;
+      if (!p || sd.timer > sd.leaveAt) { g.curiousCooldown = 600 + Math.random() * 900; return { targetSpeed: 0.05 * S, transition: STATE.IDLE }; }
+      const d = dist(head.x, head.y, p.x, p.y);
+      if (d > CURIOUS_RADIUS * 1.2) return { targetSpeed: 0.05 * S, transition: STATE.IDLE };
+      if (d < STALK_RADIUS) { g.targetBug = null; g.curiousCooldown = 900; return { targetSpeed: 0, transition: STATE.HUNT }; }
+      const toP = Math.atan2(p.y - head.y, p.x - head.x);
+      g.headLook.lookAt(angleDiff(g.angle, toP));
+      // A spot a little nearer, kept to as the pointer moves.
+      if (!sd.spot || dist(sd.anchor.x, sd.anchor.y, p.x, p.y) > 15) {
+        const a = Math.atan2(head.y - p.y, head.x - p.x) + (Math.random() - 0.5) * 0.6, r = sd.keep + Math.random() * 6;
+        sd.spot = w.clampToBounds(p.x + Math.cos(a) * r, p.y + Math.sin(a) * r, 8);
+        sd.anchor = { ...p };
+        g.planRoute(sd.spot.x, sd.spot.y);
+      }
+      if (dist(head.x, head.y, sd.spot.x, sd.spot.y) < 4) {
+        // Having watched a while, it dares a little closer — until it is close enough to stalk.
+        if (++sd.waited > 120 + Math.random() * 60) { sd.waited = 0; sd.keep -= 12; sd.spot = null; }
+        if (sd.timer % 200 === 100) g.flick();
+        return { targetSpeed: 0 };
+      }
+      // Unhurried: a few steps, a look, a few more.
+      const wp = g.waypoint(sd.spot.x, sd.spot.y);
+      g.targetAngle = Math.atan2(wp.y - head.y, wp.x - head.x);
+      if (sd.timer % 200 === 150) g.flick();
+      return { targetSpeed: sd.timer % 100 < 50 ? g.speed * 0.6 : 0 };
     },
   },
 
@@ -800,6 +839,8 @@ export class Personality {
   inkAt: { x: number; y: number } | null = null;
   /** Ticks before it will come and lurk by your typing again. */
   lurkCooldown = 0;
+  /** Ticks before the pointer can catch its eye again. */
+  curiousCooldown = 0;
   /** How often a letter is stuck fast and takes a struggle to pull free. */
   stuckChance = 0.45;
   private route: Waypoint[] | null = null;
@@ -1036,7 +1077,10 @@ export class Personality {
   }
 
   /** Is it calm enough to take an interest in something new? */
-  get calm() { const s = this.state; return s === STATE.IDLE || s === STATE.EXPLORE || s === STATE.BASKING || s === STATE.LURK; }
+  get calm() {
+    const s = this.state;
+    return s === STATE.IDLE || s === STATE.EXPLORE || s === STATE.BASKING || s === STATE.LURK || s === STATE.CURIOUS;
+  }
 
   /** Where to stalk the caret from: a little way off, on its own side, off the words if it can. */
   lurkSpot(k: { x: number; y: number }) {
@@ -1044,10 +1088,11 @@ export class Personality {
     const side = Math.atan2(h.y - k.y, h.x - k.x);
     let fallback: { x: number; y: number } | null = null;
     for (let i = 0; i < 16; i++) {
-      const a = side + (Math.random() - 0.5) * 1.8, d = 18 + Math.random() * 8;
+      const a = side + (Math.random() - 0.5) * 1.8, d = 26 + Math.random() * 8;
       const q = w.clampToBounds(k.x + Math.cos(a) * d, k.y + Math.sin(a) * d, 8);
       fallback ??= q;
-      if (!w.onText(q.x, q.y, 2)) return q;
+      // Clear of the line being typed (and the one a new line would start on), off the words.
+      if (Math.abs(q.y - k.y) >= 11 && !w.onText(q.x, q.y, 2)) return q;
     }
     return fallback!;
   }
@@ -1151,10 +1196,13 @@ export class Personality {
     if (p && st !== STATE.STARTLE && st !== STATE.FLEE && st !== STATE.HUNT) {
       if (this.cursorSpeed > this.traits.resolve('startleSpeed') * S && cursorDist < this.traits.resolve('startleDist') * S) { this.scareFrom(p); return; }
     }
-    // A pointer resting nearby is irresistible: stalk it.
-    if (p && !this.petted && (st === STATE.IDLE || st === STATE.BASKING || st === STATE.EXPLORE)) {
-      if (cursorDist < 100 * S && cursorDist > 25 * S && this.cursorSpeed < 4 * S) {
+    // A pointer resting nearby is irresistible: stalk it. Further off, it catches the eye.
+    if (p && !this.petted && !this.typing && (st === STATE.IDLE || st === STATE.BASKING || st === STATE.EXPLORE)) {
+      if (cursorDist < STALK_RADIUS && cursorDist > 25 * S && this.cursorSpeed < 4 * S) {
         if (Math.random() < this.traits.resolve('huntChance') + this.traits.resolve('huntChanceBoost')) { this.targetBug = null; this.enterState(STATE.HUNT); return; }
+      } else if (cursorDist < CURIOUS_RADIUS && this.cursorSpeed < 4 * S && this.curiousCooldown <= 0 && Math.random() < 0.01) {
+        this.enterState(STATE.CURIOUS);
+        return;
       }
     }
     if (this.needs.hunger >= 90 && st !== STATE.SLEEP && st !== STATE.FLEE && st !== STATE.STARTLE && st !== STATE.HUNT) {
@@ -1281,6 +1329,7 @@ export class Personality {
     if (this.lure && (--this.lureTicks <= 0 || (this.lureThere && !this.lureThere()))) { this.lure = null; this.lureThere = null; }
     // You're typing: now and then it creeps over to lurk nearby and watch.
     if (this.lurkCooldown > 0) this.lurkCooldown--;
+    if (this.curiousCooldown > 0) this.curiousCooldown--;
     const caret = c.world.caret;
     if (this.state !== STATE.LURK && this.lurkCooldown <= 0 && this.calm && caret && this.typing && Math.random() < 0.04) {
       const d = this.distTo(caret.x, caret.y);

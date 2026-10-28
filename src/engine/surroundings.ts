@@ -20,7 +20,7 @@ type Rgb = [number, number, number];
 interface Print { x: number; y: number; angle: number; rgb: Rgb; alpha: number; born: number; }
 
 const PRINT_LIFE = 5000;
-const PRINT_ALPHA = 0.55;
+const PRINT_ALPHA = 0.28;
 /** How much ink a step uses up: a foot leaves this many prints and is clean again. */
 const INK_PER_STEP = 0.22;
 const TEXT_ROOTS = '.cm-content, .markdown-preview-view';
