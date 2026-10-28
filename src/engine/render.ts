@@ -1,4 +1,4 @@
-import { Body, Leg, NEARER, SPINE } from './body';
+import { Body, Leg, NEARER, SPINE, TAIL_FIRST } from './body';
 import type { Palette } from './palette';
 
 /*
@@ -87,6 +87,13 @@ export class GeckoRenderer {
   stableLegs = true;
   /** Keep a planted foot's toes where they were set down, instead of turning with the body. */
   lockToes = true;
+  /**
+   * Drawn the way a careful pixel artist would: a cleaned-up silhouette (no single-pixel
+   * bumps or notches), three tones — highlight on the side toward the light, mid, and
+   * shadow only on the far edge and underside — and a pale accent on the toes and snout.
+   */
+  refined = false;
+  private mask = new Uint8Array(0);
   /** How the eyes are drawn: one pixel, a 2×2 block, a block with a glint, or bulging past the head. */
   eyeStyle: 'dot' | 'big' | 'glint' | 'bulge' = 'dot';
   private snapped = new Map<Leg, Snapped>();
@@ -182,7 +189,9 @@ export class GeckoRenderer {
       const f = b.forward(i);
       const z = b.z[i];
       const { x: cx, y: cy } = project(sp.x, sp.y, z);
-      const r = b.width(i) * b.breathScale(i) * b.squeeze[i] * (1 + NEARER * Math.max(0, z)) * res;
+      let r = b.width(i) * b.breathScale(i) * b.squeeze[i] * (1 + NEARER * Math.max(0, z)) * res;
+      // A tail that never breaks up into dots at its thin end.
+      if (this.refined) r = Math.max(r, 0.75 * res);
       disc(cx, cy, r, (x, y, dx, dy, d2) => {
         const lx = x - this.bx, ly = y - this.by;
         if (lx < 0 || ly < 0 || lx >= this.bw || ly >= this.bh) return;
@@ -199,6 +208,7 @@ export class GeckoRenderer {
   }
 
   private paintBody(ctx: CanvasRenderingContext2D, b: Body, pal: Palette) {
+    if (this.refined) { this.paintRefined(ctx, pal); return; }
     const { bw, bh, bx, by, depth, lat, seg } = this;
     // How the spine bends over the terrain at each point: positive where it crests over
     // a ridge or the lip of a ledge, negative in the dip or crease below one.
@@ -212,6 +222,38 @@ export class GeckoRenderer {
       if (depth[k] <= 0) continue;
       const lit = lat[k] * this.light + SHADE_EDGE > 0, d = bend[seg[k]];
       ctx.fillStyle = lit ? (d > 0.5 ? pal.crest : pal.base) : d < -0.5 ? pal.crease : pal.shade;
+      ctx.fillRect(bx + x, by + y, 1, 1);
+    }
+  }
+
+  /** The refined look: clean silhouette and three-tone shading. */
+  private paintRefined(ctx: CanvasRenderingContext2D, pal: Palette) {
+    const { bw, bh, bx, by, depth, lat, seg } = this;
+    const n = bw * bh;
+    if (this.mask.length < n) this.mask = new Uint8Array(n);
+    const m = this.mask;
+    const on = (x: number, y: number) => x >= 0 && y >= 0 && x < bw && y < bh && depth[y * bw + x] > 0;
+    const n4 = (x: number, y: number) => (on(x - 1, y) ? 1 : 0) + (on(x + 1, y) ? 1 : 0) + (on(x, y - 1) ? 1 : 0) + (on(x, y + 1) ? 1 : 0);
+    // Clean the silhouette: fill one-pixel notches, shave one-pixel bumps off the head and
+    // trunk (the tail is thin enough that its single pixels are the line itself).
+    for (let y = 0; y < bh; y++) for (let x = 0; x < bw; x++) {
+      const k = y * bw + x, c = n4(x, y);
+      if (depth[k] > 0) m[k] = seg[k] < TAIL_FIRST && c <= 1 ? 0 : 1;
+      else if (c >= 3) {
+        m[k] = 2;
+        const src = on(x - 1, y) ? k - 1 : on(x + 1, y) ? k + 1 : on(x, y - 1) ? k - bw : k + bw;
+        seg[k] = seg[src]; lat[k] = lat[src];
+      } else m[k] = 0;
+    }
+    const filled = (x: number, y: number) => x >= 0 && y >= 0 && x < bw && y < bh && m[y * bw + x] > 0;
+    for (let y = 0; y < bh; y++) for (let x = 0; x < bw; x++) {
+      const k = y * bw + x;
+      if (!m[k]) continue;
+      const f = lat[k] * this.light;
+      const edge = !filled(x - 1, y) || !filled(x + 1, y) || !filled(x, y - 1) || !filled(x, y + 1);
+      // Shadow is the far side's edge and the mass of the underside; the near side
+      // carries a highlight band inside its edge; the rest is mid tone.
+      ctx.fillStyle = f < -0.55 || (edge && f < -0.1) ? pal.shade : f > 0.25 && !edge ? pal.light : pal.base;
       ctx.fillRect(bx + x, by + y, 1, 1);
     }
   }
@@ -267,6 +309,12 @@ export class GeckoRenderer {
 
     // Mouth: when open, the snout tip splits.
     const tip = project(b.pts[0].x + fx * 0.9, b.pts[0].y + fy * 0.9, b.z[0]);
+    // The refined look picks out the tip of the snout in the pale accent.
+    if (this.refined && b.mouth <= 0.35) {
+      const nose = project(b.pts[0].x + fx * 0.3, b.pts[0].y + fy * 0.3, b.z[0]);
+      const p = { x: Math.floor(nose.x), y: Math.floor(nose.y) };
+      if (onHead(p)) px(p, pal.toe);
+    }
     if (b.mouth > 0.35) {
       px({ x: Math.floor(tip.x), y: Math.floor(tip.y) }, pal.tongue);
       px({ x: Math.floor(tip.x + lx * 1.1 * s0), y: Math.floor(tip.y + ly * 1.1 * s0) }, pal.shade);
@@ -316,14 +364,14 @@ export class GeckoRenderer {
       snaps.set(leg, s);
       hip = { x: s[0] + 0.5, y: s[1] + 0.5 }; knee = { x: s[2] + 0.5, y: s[3] + 0.5 }; foot = { x: s[4] + 0.5, y: s[5] + 0.5 };
     }
-    const put = (x: number, y: number, l: number, z: number) => {
+    const put = (x: number, y: number, l: number, z: number, col = c) => {
       const ix = Math.floor(x), iy = Math.floor(y);
       const key = iy * 100003 + ix;
       if (seen.has(key)) return;
       seen.add(key);
-      out.push({ x: ix, y: iy, c, lift: l, z });
+      out.push({ x: ix, y: iy, c: col, lift: l, z });
     };
-    const line = (ax: number, ay: number, cx: number, cy: number, l0: number, l1: number, z0: number, z1: number) => {
+    const line = (ax: number, ay: number, cx: number, cy: number, l0: number, l1: number, z0: number, z1: number, col = c) => {
       if (this.stableLegs) {
         // A clean one-pixel step line between whole-pixel joints (Bresenham).
         let x = Math.floor(ax), y = Math.floor(ay);
@@ -333,7 +381,7 @@ export class GeckoRenderer {
         let err = dx + dy, i = 0;
         for (;;) {
           const u = i++ / n;
-          put(x, y, l0 + (l1 - l0) * u, z0 + (z1 - z0) * u);
+          put(x, y, l0 + (l1 - l0) * u, z0 + (z1 - z0) * u, col);
           if (x === x1 && y === y1) break;
           const e2 = 2 * err;
           if (e2 >= dy) { err += dy; x += sx; }
@@ -344,7 +392,7 @@ export class GeckoRenderer {
       const n = Math.max(1, Math.ceil(Math.hypot(cx - ax, cy - ay) * 2));
       for (let s = 0; s <= n; s++) {
         const u = s / n;
-        put(ax + (cx - ax) * u, ay + (cy - ay) * u, l0 + (l1 - l0) * u, z0 + (z1 - z0) * u);
+        put(ax + (cx - ax) * u, ay + (cy - ay) * u, l0 + (l1 - l0) * u, z0 + (z1 - z0) * u, col);
       }
     };
     line(hip.x, hip.y, knee.x, knee.y, 0, lift * 0.5, zh, zk);
@@ -355,7 +403,7 @@ export class GeckoRenderer {
     const dir = this.lockToes ? leg.toe : blendAngle(Math.atan2(oy, ox), fwdBias, leg.def.front ? 0.5 : 0.35);
     for (const spread of [-0.75, 0.75]) {
       // A short claw line from the foot, so it stays attached however fine the grid.
-      line(foot.x, foot.y, foot.x + Math.cos(dir + spread) * 1.2 * res, foot.y + Math.sin(dir + spread) * 1.2 * res, 0, 0, zf, zf);
+      line(foot.x, foot.y, foot.x + Math.cos(dir + spread) * 1.2 * res, foot.y + Math.sin(dir + spread) * 1.2 * res, 0, 0, zf, zf, this.refined ? pal.toe : c);
     }
   }
 }
