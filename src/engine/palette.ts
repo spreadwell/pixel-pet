@@ -12,10 +12,6 @@ export interface Palette {
   eye: string;
   /** A catch-light in the eye. */
   glint: string;
-  /** Pale accent for the extremities — toes and snout — like a rat's pink paws and nose. */
-  toe: string;
-  /** The highlight band along the side toward the light (refined look). */
-  light: string;
   tongue: string;
   shadow: string;
   ink: string;      // theme text colour, for crumbs and bugs
@@ -76,8 +72,6 @@ export function buildPalette(doc: Document, seedExpr: string): Palette {
     crease: hsl(h - 5, Math.min(1, s * 1.05), l * 0.61),
     eye: hsl(h - 25, 0.35, 0.1),
     glint: 'hsl(0 0% 96%)',
-    toe: hsl(h + 30, s * 0.5, Math.min(0.86, l + 0.2)),
-    light: hsl(h + 3, s * 0.92, Math.min(0.82, l + 0.11)),
     tongue: 'hsl(350 70% 66%)',
     shadow: dark ? 'rgba(0,0,0,0.42)' : 'rgba(40,30,10,0.16)',
     ink: `rgb(${ink.join(',')})`,
