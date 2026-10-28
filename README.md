@@ -22,7 +22,7 @@ Now and then it tastes a word with its tongue, plucks a letter out of it and scu
 - It pauses completely when Obsidian is hidden and runs at a few frames per second while asleep.
 - Reduced motion is respected, following your system setting unless you override it.
 
-Show or hide it from the ribbon (paw icon) or the command palette. The palette also has **Call the pet over** and **Release a bug**.
+Show or hide it from the ribbon (paw icon) or the command palette. The palette also has **Call the pet over**, **Release a bug** and **Open pet panel**: an optional side panel that shows what the pet is up to and lets you ask it to come over, find a place to sleep, wake up, go exploring, explore the note you're on, have something to eat, steal a letter, bask, do push-ups, or play with the graph.
 
 Works on desktop and mobile. On touch screens, tap near it to get its attention, hold a finger on it to pet it, and tap it directly to make it dart away.
 

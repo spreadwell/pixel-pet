@@ -1205,13 +1205,18 @@ export class Personality {
   /** Sleepy, or just in the mood, with a code block or callout close by: nap on it? */
   wantsNap() {
     if (this.napCooldown > 0 || (this.needs.sleepiness < 0.25 && Math.random() > 0.12)) return false;
+    return this.findNapRock(260);
+  }
+
+  /** The nearest code block or callout on screen it could nap on, within `range` (into napRock). */
+  findNapRock(range: number) {
     const w = this.c.world, h = this.head;
     let best: Rect | null = null;
     for (const r of w.rocks) {
       // Big enough to curl up on, and on screen.
       if (r.w < 36 || r.h < 10 || !w.inBounds(r.x + r.w / 2, r.y + r.h / 2, 8)) continue;
       const d = Math.hypot(clamp(h.x, r.x, r.x + r.w) - h.x, clamp(h.y, r.y, r.y + r.h) - h.y);
-      if (d < 260 && (!best || d < Math.hypot(clamp(h.x, best.x, best.x + best.w) - h.x, clamp(h.y, best.y, best.y + best.h) - h.y))) best = r;
+      if (d < range && (!best || d < Math.hypot(clamp(h.x, best.x, best.x + best.w) - h.x, clamp(h.y, best.y, best.y + best.h) - h.y))) best = r;
     }
     this.napRock = best;
     return !!best;
@@ -1613,11 +1618,12 @@ export class Personality {
    * scurries up onto it for safety; in a graph view it may start a game; on the note it
    * scouts round the edges; otherwise it has a look round where it is.
    */
-  newSurroundings(view: Rect | null) {
+  newSurroundings(view: Rect | null, asked = false) {
     this.route = null;
-    if (!this.calm && this.state !== STATE.SCOUT && this.state !== STATE.PLAY) return;
+    if (!asked && !this.calm && this.state !== STATE.SCOUT && this.state !== STATE.PLAY) return;
     const w = this.c.world, h = this.head;
-    for (const s of w.sidebars) {
+    // (Asked to explore the note, it just does.)
+    for (const s of asked ? [] : w.sidebars) {
       const dx = Math.max(s.x - h.x, 0, h.x - (s.x + s.w)), dy = Math.max(s.y - h.y, 0, h.y - (s.y + s.h));
       if (dx === 0 && dy === 0) break;
       if (Math.hypot(dx, dy) > 45) continue;
@@ -1627,7 +1633,7 @@ export class Personality {
       this.enterState(STATE.RETREAT);
       return;
     }
-    if (this.playCooldown <= 0 && this.c.graph?.balls().some((b) => this.distTo(b.x, b.y) < 260)) { this.enterState(STATE.PLAY); return; }
+    if (!asked && this.playCooldown <= 0 && this.c.graph?.balls().some((b) => this.distTo(b.x, b.y) < 260)) { this.enterState(STATE.PLAY); return; }
     if (view && h.x > view.x && h.x < view.x + view.w && h.y > view.y && h.y < view.y + view.h) {
       // What's on screen of the note: its paragraphs, headings, code blocks and callouts.
       const things = [...w.text, ...w.rocks].filter((t) => t.x >= view.x - 1 && t.x + t.w <= view.x + view.w + 1 && t.y >= view.y && t.y + t.h <= view.y + view.h && w.inBounds(t.x + t.w / 2, t.y + t.h / 2, 10));
@@ -1711,6 +1717,82 @@ export class Personality {
   }
 
   get stateName() { return this.state + (this.petted ? '+petted' : ''); }
+
+  /** What it's up to, in a few words, for the pet panel. */
+  get activity(): string {
+    const s = this.state, sd = this.stateData;
+    if (this.petted) return 'Being petted';
+    switch (s) {
+      case STATE.IDLE: return 'Looking around';
+      case STATE.BASKING: return 'Basking';
+      case STATE.EXPLORE: return 'Exploring';
+      case STATE.HUNT: return 'Hunting';
+      case STATE.FEAST: return 'Eating';
+      case STATE.STARTLE: case STATE.FLEE: return 'Spooked';
+      case STATE.SLEEP: return 'Asleep';
+      case STATE.NAP: return sd.phase === 'asleep' ? 'Napping' : sd.phase === 'wake' ? 'Waking up' : 'Settling down for a nap';
+      case STATE.NIBBLE: return 'After a letter';
+      case STATE.HELD: return 'Being held';
+      case STATE.WATCH: return 'Watching';
+      case STATE.INSPECT: return 'Sniffing your words';
+      case STATE.LURK: return sd.target === 'caret' ? 'Watching you type' : 'Watching your pointer';
+      case STATE.CURIOUS: return 'Curious';
+      case STATE.SCOUT: return 'Exploring the note';
+      case STATE.RETREAT: return 'Lying low on the side panel';
+      case STATE.PLAY: return 'Playing';
+      default: return s;
+    }
+  }
+
+  /** Do what the pet panel asks. Returns a few words to show if it can't, or null. */
+  command(cmd: string): string | null {
+    if (this.state === STATE.HELD) return "Put it down first";
+    const asleep = this.state === STATE.SLEEP || this.state === STATE.NAP;
+    switch (cmd) {
+      case 'sleep': {
+        if (asleep) return 'Already asleep';
+        this.napCooldown = 0;
+        if (this.findNapRock(Infinity)) { this.enterState(STATE.NAP); return null; }
+        // No block to nap on: home to bed.
+        this.needs.sleepiness = 1;
+        this.needs.hunger = Math.max(this.needs.hunger, 30);
+        this.summon({ x: this.homeX, y: this.homeY });
+        return 'No code block or callout to nap on: heading home to sleep';
+      }
+      case 'wake':
+        if (!asleep) return "It's awake";
+        if (this.state === STATE.NAP && this.stateData.phase === 'asleep') { this.stateData.phase = 'wake'; this.stateData.t = 0; }
+        else if (this.state === STATE.NAP) this.enterState(STATE.IDLE);
+        else { this.forcedNap = false; this.needs.sleepiness = 0; this.enterState(STATE.IDLE); this.blink(); }
+        return null;
+      case 'explore':
+        this.enterState(STATE.EXPLORE);
+        return null;
+      case 'eat':
+        this.needs.hunger = Math.min(this.needs.hunger, 40);
+        if (asleep) this.command('wake');
+        return null;
+      case 'play':
+        if (!this.c.graph?.balls().length) return 'Open the graph view for it to play in';
+        this.playCooldown = 0;
+        this.enterState(STATE.PLAY);
+        return null;
+      case 'pushups':
+        this.enterState(STATE.IDLE);
+        this.stateData.duration = 600;
+        this.schedulePushups(4);
+        return null;
+      case 'bask':
+        this.enterState(STATE.BASKING);
+        return null;
+      case 'nibble':
+        if (!this.c.opts.nibble) return 'Letter stealing is off in settings';
+        this.nextNibble = 0;
+        if (asleep || (this.state !== STATE.IDLE && this.state !== STATE.EXPLORE && this.state !== STATE.BASKING)) this.enterState(STATE.IDLE);
+        return null;
+    }
+    return null;
+  }
 
   // ── Perception ────────────────────────────────────────────────
 

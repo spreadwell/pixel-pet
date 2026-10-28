@@ -355,7 +355,8 @@ export class World {
   private scanRocks(): Rect[] {
     const doc = this.win.document, vh = this.win.innerHeight;
     const rects: DOMRect[] = [];
-    doc.querySelectorAll<HTMLElement>('.workspace-leaf.mod-active .markdown-rendered pre, .workspace-leaf.mod-active .callout, .workspace-leaf.mod-active .HyperMD-codeblock').forEach((el) => {
+    // In any note on screen, not just the one in focus (clicking a side panel moves the focus).
+    doc.querySelectorAll<HTMLElement>('.workspace-leaf .markdown-rendered pre, .workspace-leaf .callout, .workspace-leaf .HyperMD-codeblock').forEach((el) => {
       const r = el.getBoundingClientRect();
       if (r.width > 0 && r.bottom > 0 && r.top < vh) rects.push(r);
     });

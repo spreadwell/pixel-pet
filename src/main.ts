@@ -2,6 +2,7 @@ import { Editor, MarkdownFileInfo, MarkdownView, Platform, Plugin } from 'obsidi
 import { PetEngine, PetOptions } from './engine/engine';
 import { rollTraits } from './engine/personality';
 import { GraphBalls } from './graph';
+import { PANEL_VIEW, PetPanel } from './panel';
 import { PixelPetSettingTab, DEFAULT_SETTINGS, PetSettings } from './settings';
 
 const WORD = /[\p{L}\p{N}]+/gu;
@@ -23,6 +24,8 @@ export default class PixelPetPlugin extends Plugin {
     this.addCommand({ id: 'toggle', name: 'Show or hide the pet', callback: () => this.toggle() });
     this.addCommand({ id: 'summon', name: 'Call the pet over', callback: () => this.engine?.summon() });
     this.addCommand({ id: 'release-bug', name: 'Release a bug', callback: () => this.engine?.spawnBug(Math.random() < 0.6 ? 'fly' : 'cricket') });
+    this.registerView(PANEL_VIEW, (leaf) => new PetPanel(leaf, () => this.engine));
+    this.addCommand({ id: 'open-panel', name: 'Open pet panel', callback: () => this.openPanel() });
 
     this.registerEvent(this.app.workspace.on('css-change', () => this.engine?.refreshPalette()));
     this.registerEvent(this.app.workspace.on('file-open', () => this.engine?.noteChanged()));
@@ -76,6 +79,17 @@ export default class PixelPetPlugin extends Plugin {
   private stop() {
     this.engine?.destroy();
     this.engine = null;
+  }
+
+  /** Open the pet panel in the right sidebar (or show it, if it's already open). */
+  private async openPanel() {
+    const ws = this.app.workspace;
+    let leaf = ws.getLeavesOfType(PANEL_VIEW)[0];
+    if (!leaf) {
+      leaf = ws.getRightLeaf(false) ?? ws.getLeaf(true);
+      await leaf.setViewState({ type: PANEL_VIEW, active: true });
+    }
+    await ws.revealLeaf(leaf);
   }
 
   private async toggle() {

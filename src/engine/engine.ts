@@ -160,14 +160,18 @@ export class PetEngine {
   }
 
   /** A different note or tab was opened (both events can fire for one change). */
-  noteChanged() {
+  noteChanged(asked = false) {
     const now = performance.now();
-    if (now - this.lastNoteChange < 300) return;
+    if (!asked && now - this.lastNoteChange < 300) return;
     this.lastNoteChange = now;
     this.world.scan();
-    const el = this.win.document.querySelector('.workspace-leaf.mod-active .view-content');
+    // The note in focus — or, asked from the pet panel (which has the focus then), the
+    // note showing in the main area.
+    const doc = this.win.document;
+    const shown = [...doc.querySelectorAll<HTMLElement>('.mod-root .workspace-leaf-content[data-type="markdown"] .view-content')].find((e) => e.offsetParent !== null);
+    const el = asked ? shown : doc.querySelector('.workspace-leaf.mod-active .view-content');
     const r = el?.getBoundingClientRect(), px = this.opts.px;
-    this.brain?.newSurroundings(r && r.width > 0 ? { x: r.left / px, y: r.top / px, w: r.width / px, h: r.height / px } : null);
+    this.brain?.newSurroundings(r && r.width > 0 ? { x: r.left / px, y: r.top / px, w: r.width / px, h: r.height / px } : null, asked);
   }
   private lastNoteChange = 0;
 
@@ -254,6 +258,26 @@ export class PetEngine {
   /** Text was written or a task completed: attract a bug, preferably near the caret. */
   spawnBug(kind: BugKind) {
     this.swarm.spawn(kind, this.world, this.world.caret ?? undefined);
+  }
+
+  /** What the pet is up to, in a few words. */
+  get activity() { return this.brain?.activity ?? 'Away'; }
+
+  /**
+   * A command from the pet panel: sleep, wake, explore, scout, eat, play, pushups, bask,
+   * nibble, come. Returns a few words to show if it can't, or null.
+   */
+  command(cmd: string): string | null {
+    if (!this.brain) return null;
+    if (cmd === 'come') { this.summon(); return null; }
+    if (cmd === 'scout') { this.noteChanged(true); return null; }
+    const said = this.brain.command(cmd);
+    if (cmd === 'eat') {
+      // Something to eat turns up near it.
+      const h = this.body.head;
+      this.swarm.spawn(Math.random() < 0.5 ? 'cricket' : 'fly', this.world, { x: h.x, y: h.y });
+    }
+    return said;
   }
 
   /** Come over to the pointer (or the middle of the window). */

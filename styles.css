@@ -45,3 +45,34 @@ body.pixel-pet-holding * {
   pointer-events: none;
   z-index: calc(var(--layer-popover, 30) - 1);
 }
+
+/* The pet panel: what it's up to, and buttons to ask it to do things. */
+.pixel-pet-panel-status {
+  padding: var(--size-4-2) 0 var(--size-4-3);
+  color: var(--text-normal);
+}
+.pixel-pet-panel-label {
+  color: var(--text-muted);
+}
+.pixel-pet-panel-actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--size-4-1);
+}
+.pixel-pet-panel-action {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: var(--size-4-2);
+  width: 100%;
+}
+.pixel-pet-panel-icon {
+  display: flex;
+  color: var(--text-muted);
+}
+.pixel-pet-panel-note {
+  min-height: 2.5em;
+  padding-top: var(--size-4-3);
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
