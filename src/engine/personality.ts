@@ -241,7 +241,7 @@ const StateHandlers: Record<State, Handler> = {
         nextBlinkTime: 30 + Math.random() * 60,
       };
       // Now and then, a push-up display while it stands there.
-      if (Math.random() < 0.3) g.schedulePushups(10 + Math.random() * 30);
+      if (Math.random() < 0.15) g.schedulePushups(10 + Math.random() * 30);
     },
     update(g) {
       const t = g.stateTimer, d = g.stateData;
@@ -271,7 +271,7 @@ const StateHandlers: Record<State, Handler> = {
       const baseDur = g.traits.resolve('baskDuration');
       const fullBonus = nearHome && g.needs.hunger > 70 ? g.needs.fullness * baseDur * 1.5 : 0;
       g.stateData = { duration: baseDur + Math.random() * baseDur * 1.5 + fullBonus, nextLookTime: 60 + Math.random() * 80, nextBlinkTime: 40 + Math.random() * 50 };
-      if (Math.random() < 0.45) g.schedulePushups(40 + Math.random() * Math.max(0, g.stateData.duration - 120));
+      if (Math.random() < 0.2) g.schedulePushups(40 + Math.random() * Math.max(0, g.stateData.duration - 120));
     },
     update(g) {
       const t = g.stateTimer, d = g.stateData;
@@ -922,7 +922,7 @@ export class Personality {
   pushups(): boolean {
     const d = this.display, b = this.body;
     if (!d || this.stateTimer < d.at) { b.pushup = 0; return false; }
-    const BOB = 20, t = this.stateTimer - d.at;
+    const BOB = 32, t = this.stateTimer - d.at;
     if (t >= BOB * d.bobs) {
       this.display = null;
       b.pushup = 0;
