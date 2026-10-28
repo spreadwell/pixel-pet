@@ -30,7 +30,8 @@ import { lerp } from './math';
 interface LegPixel { x: number; y: number; c: string; lift: number; z: number; }
 /** A leg's joints last drawn, in whole pixels: hip, knee, foot. */
 type Snapped = [number, number, number, number, number, number];
-type Project = (x: number, y: number, z: number) => { x: number; y: number };
+/** Art px in (and, for the tilted view, how high above the ground the point is), canvas px out. */
+type Project = (x: number, y: number, z: number, h?: number) => { x: number; y: number };
 
 
 /** Shadow offset (art px) for a pixel `h` above the ground. */
@@ -60,6 +61,8 @@ function disc(cx: number, cy: number, r: number, fn: (x: number, y: number, dx: 
  * half, while nearly end-on the shaded side thins away to nothing.
  */
 const SHADE_EDGE = 0.04;
+/** How far over the view tips for a nap: most of the way to side-on, keeping a little depth. */
+const TILT = (72 * Math.PI) / 180;
 /** Half-width of the pinched neck, art px: about two pixels across. */
 const NECK_HALF = 1.05;
 
@@ -96,6 +99,18 @@ export class GeckoRenderer {
   private snappedShadow = new Map<Leg, Snapped>();
   /** A pointed snout, no stray pixels on the head's outline, and eyes held steady. */
   steadyHead = true;
+  /**
+   * Tipping the view over towards side-on, for a nap on a block: the line on the ground the
+   * view turns about (the block's top edge, art px y), and how far over (0 from above → 1
+   * side-on, with a little depth left). Everything is drawn as the body really is in 3-D —
+   * spheres along the spine, resting on the ground, legs reaching down to it — so turning
+   * the view moves smoothly from one to the other. Past the edge, it hangs down the front.
+   */
+  tilt: { pivot: number; amount: number } | null = null;
+  /** Where the head was drawn last (canvas px), for the Z's. */
+  headAt = { x: 0, y: 0 };
+  private up = new Float32Array(0);
+  private tiltA = 0;
   /** Carve the neck narrower than the head and shoulders, whichever way it faces. */
   pinchNeck = true;
   /** The eye pixels last drawn (left, right), held like the leg joints so they don't flicker. */
@@ -109,7 +124,18 @@ export class GeckoRenderer {
     this.light += (toLight - this.light) * 0.2;
 
     // Art px in, canvas pixels out.
-    const project: Project = (x, y, z) => { const p = b.project(x, y, z); return { x: p.x * res, y: p.y * res }; };
+    const tilt = this.tilt && this.tilt.amount > 0 ? this.tilt : null;
+    this.tiltA = tilt ? tilt.amount : 0;
+    const phi = this.tiltA * TILT, cos = Math.cos(phi), sin = Math.sin(phi);
+    const project: Project = (x, y, z, h = 0) => {
+      const p = b.project(x, y, z), px = p.x * res;
+      if (!tilt) return { x: px, y: p.y * res };
+      const pv = tilt.pivot * res, dy = p.y * res - pv;
+      // On top: depth foreshortens and height rises. Past the edge: down the front.
+      if (dy <= 0) return { x: px, y: pv + dy * cos - h * res * sin };
+      return { x: px, y: pv + dy * (cos + sin) - h * res * sin * Math.max(0, 1 - dy / (3 * res)) };
+    };
+    const shadowRows = cos;
     const flat: Project = (x, y) => ({ x: x * res, y: y * res });
 
     this.frame(b, project, res);
@@ -136,7 +162,10 @@ export class GeckoRenderer {
       const o = castShadow(b, b.z[i], p.x, p.y);
       const g = b.ground(p.x + o + 0.5, p.y + o + 0.5);
       const q = project(p.x + o, p.y + o, g);
-      disc(q.x, q.y, b.width(i) * b.breathScale(i) * b.squeeze[i] * (1 + NEARER * g) * res, (x, y) => mark(x, y));
+      const rr = b.width(i) * b.breathScale(i) * b.squeeze[i] * (1 + NEARER * g) * res;
+      // Tipped over, the shadow on the ground foreshortens into a narrow band.
+      if (shadowRows < 0.999) { for (let dy = -Math.round(rr * shadowRows); dy <= Math.round(rr * shadowRows); dy++) for (let dx = -Math.round(rr); dx <= Math.round(rr); dx++) mark(Math.floor(q.x + dx), Math.floor(q.y + dy)); }
+      else disc(q.x, q.y, rr, (x, y) => mark(x, y));
     }
     for (const p of this.legPixels(b, pal, flat, this.snappedShadow, res)) {
       const ax = (p.x + 0.5) / res, ay = (p.y + 0.5) / res;
@@ -170,10 +199,10 @@ export class GeckoRenderer {
     for (let i = 0; i < SPINE; i++) {
       const p = b.pts[i];
       take(p.x * res, p.y * res);
-      const q = project(p.x, p.y, b.z[i]);
+      const q = project(p.x, p.y, b.z[i], b.width(i));
       take(q.x, q.y);
     }
-    const pad = Math.ceil(10 * res);
+    const pad = Math.ceil((this.tiltA > 0 ? 18 : 10) * res);
     this.bx = Math.floor(minX) - pad;
     this.by = Math.floor(minY) - pad;
     this.bw = Math.ceil(maxX) + 2 * pad - this.bx;
@@ -183,6 +212,7 @@ export class GeckoRenderer {
       this.depth = new Float32Array(size);
       this.seg = new Int16Array(size);
       this.lat = new Float32Array(size);
+      this.up = new Float32Array(size);
     }
     this.depth.fill(0, 0, size);
   }
@@ -192,8 +222,9 @@ export class GeckoRenderer {
       const sp = this.spinePoint(b, i);
       const f = b.forward(i);
       const z = b.z[i];
-      const { x: cx, y: cy } = project(sp.x, sp.y, z);
-      const r = b.width(i) * b.breathScale(i) * b.squeeze[i] * (1 + NEARER * Math.max(0, z)) * res;
+      const ra = b.width(i) * b.breathScale(i) * b.squeeze[i];
+      const { x: cx, y: cy } = project(sp.x, sp.y, z, ra);
+      const r = ra * (1 + NEARER * Math.max(0, z)) * res;
       disc(cx, cy, r, (x, y, dx, dy, d2) => {
         const lx = x - this.bx, ly = y - this.by;
         if (lx < 0 || ly < 0 || lx >= this.bw || ly >= this.bh) return;
@@ -204,6 +235,8 @@ export class GeckoRenderer {
           this.seg[k] = i;
           // Signed lateral offset: + is the animal's left.
           this.lat[k] = (f.x * dy - f.y * dx) / (r + 0.001);
+          // How far up the curve of the body this is, for the tipped view's light from above.
+          this.up[k] = -dy / (r + 0.001);
         }
       });
     }
@@ -218,7 +251,7 @@ export class GeckoRenderer {
     const { bw, bh, bx, by, depth } = this;
     const FIRST = 3, LAST = 9;
     const q: { x: number; y: number }[] = [];
-    for (let i = FIRST; i <= LAST; i++) q.push(project(b.pts[i].x, b.pts[i].y, b.z[i]));
+    for (let i = FIRST; i <= LAST; i++) q.push(project(b.pts[i].x, b.pts[i].y, b.z[i], b.width(i)));
     // Allowed half-width along the spine (index units): pinched to about two pixels
     // across from just behind the skull to just before the shoulders.
     const half = (s: number) => (s < 4.4 || s > 7.6 ? Infinity : s < 5 ? lerp(2, NECK_HALF, (s - 4.4) / 0.6) : s > 7 ? lerp(NECK_HALF, 1.9, (s - 7) / 0.6) : NECK_HALF);
@@ -250,7 +283,7 @@ export class GeckoRenderer {
   private taperSnout(b: Body, project: Project, res: number) {
     const { bw, bh, bx, by, depth, seg } = this;
     const fx = Math.cos(b.headAngle), fy = Math.sin(b.headAngle);
-    const c = project(b.pts[0].x, b.pts[0].y, b.z[0]);
+    const c = project(b.pts[0].x, b.pts[0].y, b.z[0], b.width(0));
     const head: number[] = [];
     let tmax = -Infinity;
     for (let y = 0; y < bh; y++) for (let x = 0; x < bw; x++) {
@@ -286,7 +319,8 @@ export class GeckoRenderer {
     for (let y = 0; y < bh; y++) for (let x = 0; x < bw; x++) {
       const k = y * bw + x;
       if (depth[k] <= 0) continue;
-      const lit = lat[k] * this.light + SHADE_EDGE > 0, d = bend[seg[k]];
+      const side = lat[k] * this.light, l = this.tiltA > 0 ? lerp(side, this.up[k] + 0.25, this.tiltA) : side;
+      const lit = l + SHADE_EDGE > 0, d = bend[seg[k]];
       ctx.fillStyle = lit ? (d > 0.5 ? pal.crest : pal.base) : d < -0.5 ? pal.crease : pal.shade;
       ctx.fillRect(bx + x, by + y, 1, 1);
     }
@@ -298,7 +332,7 @@ export class GeckoRenderer {
     const lx = fy, ly = -fx; // animal's left
     const at = (k: number, side: number) => {
       const p = b.pts[k];
-      const q = project(p.x + lx * side, p.y + ly * side, b.z[k]);
+      const q = project(p.x + lx * side, p.y + ly * side, b.z[k], b.width(k));
       return { x: Math.floor(q.x), y: Math.floor(q.y) };
     };
     const px = (p: { x: number; y: number }, c: string) => { ctx.fillStyle = c; ctx.fillRect(p.x, p.y, 1, 1); };
@@ -321,7 +355,7 @@ export class GeckoRenderer {
     // sway of the walk reads as a flickering eye.
     const held = (slot: number, k: number, side: number) => {
       const p = b.pts[k], off = b.width(k) - 0.5;
-      const want = project(p.x + lx * side * off, p.y + ly * side * off, b.z[k]);
+      const want = project(p.x + lx * side * off, p.y + ly * side * off, b.z[k], b.width(k));
       const prev = this.eyes[slot];
       if (this.steadyHead && prev && Math.abs(want.x - (prev.x + 0.5)) < 0.9 && Math.abs(want.y - (prev.y + 0.5)) < 0.9 && onHead(prev)) return prev;
       return eyeAt(k, side);
@@ -331,7 +365,10 @@ export class GeckoRenderer {
     for (const k of [4, 2]) if (right.x === left.x && right.y === left.y) right = eyeAt(k, -1);
     this.eyes = [left, right];
     const closed = b.lid > 0.55, col = closed ? pal.shade : pal.eye;
+    // Tipped towards side-on, only the near eye (lower on screen) shows.
+    const near = left.y >= right.y ? left : right;
     for (const [e, side] of [[left, 1], [right, -1]] as const) {
+      if (this.tiltA > 0.6 && e !== near) continue;
       if (this.eyeStyle === 'dot') { px(e, col); continue; }
       if (this.eyeStyle === 'bulge') {
         // On the edge of the skull, and a pixel standing proud of it.
@@ -353,7 +390,9 @@ export class GeckoRenderer {
     }
 
     // Mouth: when open, the snout tip splits.
-    const tip = project(b.pts[0].x + fx * 0.9, b.pts[0].y + fy * 0.9, b.z[0]);
+    const tip = project(b.pts[0].x + fx * 0.9, b.pts[0].y + fy * 0.9, b.z[0], b.width(0));
+    const hc = project(b.pts[2].x, b.pts[2].y, b.z[2], b.width(2));
+    this.headAt = { x: hc.x, y: hc.y };
     if (b.mouth > 0.35) {
       px({ x: Math.floor(tip.x), y: Math.floor(tip.y) }, pal.tongue);
       px({ x: Math.floor(tip.x + lx * 1.1 * s0), y: Math.floor(tip.y + ly * 1.1 * s0) }, pal.shade);
@@ -368,7 +407,7 @@ export class GeckoRenderer {
         for (let s = 0.6; s <= len; s += 0.6) px({ x: Math.floor(tip.x + fx * s), y: Math.floor(tip.y + fy * s) }, pal.tongue);
       } else {
         // Eye lick: the tongue sweeps from the snout up over one eye.
-        const eye = project(b.pts[3].x + lx * t.side * b.width(3), b.pts[3].y + ly * t.side * b.width(3), b.z[3]);
+        const eye = project(b.pts[3].x + lx * t.side * b.width(3), b.pts[3].y + ly * t.side * b.width(3), b.z[3], b.width(3));
         const u = ext;
         const mx = tip.x + (eye.x - tip.x) * u + fx * 1.2 * s0 * Math.sin(u * Math.PI);
         const my = tip.y + (eye.y - tip.y) * u + fy * 1.2 * s0 * Math.sin(u * Math.PI);
@@ -394,7 +433,9 @@ export class GeckoRenderer {
     const seen = new Set<number>();
     // Heights: the hip rides with the body, the foot stands on the terrain (or lifts off it).
     const zh = b.z[leg.def.seg], zf = b.footZ(leg), zk = (zh + zf) / 2;
-    let hip = project(leg.hip.x, leg.hip.y, zh), knee = project(leg.knee.x, leg.knee.y, zk), foot = project(leg.foot.x, leg.foot.y, zf);
+    // Tipped over, the hip is up at the body's side, the elbow or knee higher, the foot down.
+    const wh = b.width(leg.def.seg);
+    let hip = project(leg.hip.x, leg.hip.y, zh, wh * 0.6), knee = project(leg.knee.x, leg.knee.y, zk, wh * 0.9), foot = project(leg.foot.x, leg.foot.y, zf, 0);
     if (this.stableLegs) {
       // Hold each joint's pixel until the real joint is clearly over the next one.
       const prev = snaps.get(leg);

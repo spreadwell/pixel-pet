@@ -92,6 +92,8 @@ const STRIDE_MAX = 8;
 const COMFORT = 0.9;
 /** Curled up asleep: how much each joint of the trunk and of the tail bends (radians). */
 const CURL_TRUNK = 0.14, CURL_TAIL = 0.2;
+/** Draped over a ledge: how much each of the first joints of the tail turns it over. */
+const CURL_DRAPE = 0.19;
 const MAX_STEP_HZ = 8;
 /** Steepest the body drapes over a step: height change per art px of spine. */
 const DRAPE_SLOPE = 0.8;
@@ -191,6 +193,8 @@ export class Body {
   curl = 0;              // 0 straight → 1 curled up in a C (sleep)
   curlTarget = 0;
   curlDir: 1 | -1 = 1;
+  /** How it lies when it settles: curled round in a C, or stretched out with its tail turned off to one side (over a ledge). */
+  curlStyle: 'coil' | 'drape' = 'coil';
 
   tailTwitch = 0;        // amplitude target 0..1
   /** Winding up to pounce: the hips and tail base wiggle side to side, 0..1. */
@@ -386,6 +390,7 @@ export class Body {
 
     // ── Trunk and tail follow with stiffness ────────────────
     this.curl = approach(this.curl, this.curlTarget, this.curlTarget > this.curl ? 0.9 : 2.2, dt);
+    if (this.curlTarget === 0 && this.curl < 0.02) this.curlStyle = 'coil';
     const path = this.path;
     for (let i = 0; i <= NECK; i++) { path[i].x = this.pts[i].x; path[i].y = this.pts[i].y; }
     let prevAng = this.heading + Math.PI;
@@ -397,7 +402,8 @@ export class Body {
       d = clamp(d, -maxB, maxB);
       // Curling up to sleep, every joint behind the neck bends the same way — the trunk a
       // little, the tail more — until the body lies in a C with the head by its tail tip.
-      if (this.curl > 0) d = lerp(d, this.curlDir * (i <= HIP ? CURL_TRUNK : CURL_TAIL), this.curl);
+      // Draped, the trunk lies straight and only the tail turns, off to the side.
+      if (this.curl > 0) d = lerp(d, this.curlDir * (this.curlStyle === 'coil' ? (i <= HIP ? CURL_TRUNK : CURL_TAIL) : i > HIP && i <= HIP + 8 ? CURL_DRAPE : 0), this.curl);
       ang = prevAng + d;
       const len = segH(this.z[i] - this.z[i - 1]);
       p.x = a.x + Math.cos(ang) * len;

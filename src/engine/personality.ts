@@ -1,7 +1,6 @@
 import { Body, Drive, NEARER, TAIL_FIRST } from './body';
 import type { Bug, Particles, Swarm } from './bugs';
 import type { InputTracker } from './input';
-import { NAP_W, NapPose } from './napsprite';
 import { Rect, angleDiff, clamp, lerp, rand, smoothstep } from './math';
 import type { NibbleTarget, Nibbler } from './nibble';
 import type { Palette } from './palette';
@@ -45,8 +44,6 @@ import type { CoverEntry, World } from './world';
 // are in 60 Hz ticks, exactly as in the original.
 
 const S = 0.55;
-/** Hopping up onto (or down off) a block for a nap: how long the hop takes, ticks. */
-const HOP = 14;
 /** The pointer catches its eye within this distance (art px)... */
 const CURIOUS_RADIUS = 170;
 /** ...and within this one it stalks it. */
@@ -906,21 +903,22 @@ const StateHandlers: Record<State, Handler> = {
   },
 
   // A nap on a code block or callout. It walks in along the top of the block's front
-  // edge, hops up onto it — and lands seen from the side, head up, looking about. Then it
-  // settles: head down onto its forearm, the near arm slipping down over the edge, the
-  // tail after it, eyes closing; and the Z's start. A pointer moving close by wakes it: it
-  // opens its eyes, gathers itself up and hops back down.
+  // edge; then, as it settles, the view turns over to nearly side-on — the same body, in
+  // 3-D — so it's seen lying along the top of the block, belly down, chin resting, its
+  // tail turning off over the edge and hanging down the front. Its eyes close; Z's. A
+  // pointer moving close by wakes it: eyes open, the view turns back, and it's off.
   [STATE.NAP]: {
     enter(g) {
       const r = g.napRock!, h = g.head;
-      // Lying in from the nearer end, facing along the block.
+      // Lying in from the nearer end, facing along the block, just back from its edge.
       const face = h.x < r.x + r.w / 2 ? 1 : -1, x = face > 0 ? r.x + 34 : r.x + r.w - 34, y = r.y - 3;
-      g.stateData = { phase: 'go', face, spot: { x: x - face * 14, y }, end: { x, y }, ledge: r.y, sleepFor: 600 + Math.random() * 900, t: 0 };
+      g.stateData = { phase: 'go', face, spot: { x: x - face * 14, y }, end: { x, y }, ledge: r.y, tilt: 0, sleepFor: 600 + Math.random() * 900, t: 0 };
       g.planRoute(x - face * 14, y);
     },
     update(g) {
       const sd = g.stateData, head = g.head, b = g.body;
       sd.t++;
+      const ease = (a: number, d: number) => smoothstep(clamp((sd.t - a) / d, 0, 1));
       switch (sd.phase) {
         case 'go': {
           if (g.arrived(sd) || sd.t > 600) { sd.phase = 'line'; sd.t = 0; }
@@ -929,37 +927,34 @@ const StateHandlers: Record<State, Handler> = {
           return { targetSpeed: g.speed * 0.8 };
         }
         case 'line':
-          // Along the edge, so it's lying the right way when it hops up.
+          // Along the edge, so it's lying the right way when it settles.
           if ((head.x - sd.end.x) * sd.face > -1 || sd.t > 240) {
-            sd.phase = 'hop'; sd.t = 0;
-            sd.x = b.pts[12].x;
-            g.flick();
+            sd.phase = 'settle'; sd.t = 0;
+            b.curlStyle = 'drape';
+            // The animal's left is up the screen when it faces right: turn the tail the
+            // other way, out over the edge.
+            b.curlDir = Math.cos(b.heading) > 0 ? -1 : 1;
             return { targetSpeed: 0 };
           }
           g.targetAngle = Math.atan2(sd.end.y - head.y, sd.end.x - head.x);
           return { targetSpeed: g.speed * 0.5 };
-        case 'hop':
-          if (sd.t >= HOP) { sd.phase = 'alert'; sd.t = 0; }
-          break;
-        case 'alert':
-          // Landed: head up, a look about, a blink.
-          if (sd.t === 20) g.blink();
-          if (sd.t >= 50) { sd.phase = 'settle'; sd.t = 0; }
-          break;
         case 'settle':
+          sd.tilt = ease(0, 50);
+          sd.lids = ease(45, 30);
           if (sd.t >= 80) { sd.phase = 'asleep'; sd.t = 0; }
           break;
         case 'wake':
-          if (sd.t >= 30 + HOP) { g.blink(); g.flick(); return { targetSpeed: 0, transition: STATE.IDLE }; }
+          sd.lids = 1 - ease(0, 8);
+          sd.tilt = 1 - ease(8, 36);
+          if (sd.t >= 46) { g.blink(); g.flick(); return { targetSpeed: 0, transition: STATE.IDLE }; }
           return { targetSpeed: 0 };
       }
-      // Up there (landed, settling or asleep). The block scrolled away or the note changed
-      // under it: down at once.
-      if (!g.c.world.rockAt(sd.x, sd.ledge + 2)) return { targetSpeed: 0, transition: STATE.IDLE };
+      // Settling or asleep. The block scrolled away or the note changed under it: up.
+      if (!g.c.world.rockAt(b.pts[12].x, sd.ledge + 2)) return { targetSpeed: 0, transition: STATE.IDLE };
       if (g.userIdle) sd.sleepFor = Math.max(sd.sleepFor, sd.t + 60);
       // A pointer moving about close by wakes it; one already resting there doesn't.
       const p = g.pointer;
-      if (sd.phase !== 'hop' && ((p && g.cursorSpeed > 0.3 && g.bodyDistance(p.x, p.y) < 18) || (sd.phase === 'asleep' && sd.t > sd.sleepFor))) {
+      if ((p && g.cursorSpeed > 0.3 && g.bodyDistance(p.x, p.y) < 18) || (sd.phase === 'asleep' && sd.t > sd.sleepFor)) {
         if (sd.phase === 'asleep') g.needs.sleepiness = Math.max(0, g.needs.sleepiness - 0.5);
         sd.phase = 'wake'; sd.t = 0;
       }
@@ -1158,42 +1153,15 @@ export class Personality {
   retreatOut: { x: number; y: number } | null = null;
   /** Ticks until it will start another game with the graph. */
   playCooldown = 0;
-  /**
-   * Napping on a block: how to draw it — still from above (mid-hop), or from the side in
-   * the nap pose — and where. Null when it isn't up there.
-   */
-  get napView(): { side: boolean; x: number; ledge: number; face: 1 | -1; rise: number; pose: NapPose } | null {
+  /** Napping on a block: the view turned over about its edge, and how far (see GeckoRenderer.tilt). */
+  get napTilt(): { pivot: number; amount: number } | null {
     const sd = this.stateData;
-    if (this.state !== STATE.NAP || sd.phase === 'go' || sd.phase === 'line') return null;
-    const t = sd.t, ease = (a: number, d: number) => smoothstep(clamp((t - a) / d, 0, 1));
-    const up: NapPose = { headUp: 1, armDown: 0, tailDown: 0, lids: 0, breath: 0 };
-    // The hop: from above for the first half (rising), from the side for the second (landing).
-    const hop = (k: number) => ({ side: k >= 0.5, rise: Math.sin(Math.PI * k) * 4 });
-    const base = { x: sd.x - (sd.face > 0 ? NAP_W / 2 : -NAP_W / 2), ledge: sd.ledge, face: sd.face as 1 | -1 };
-    if (sd.phase === 'hop') return { ...base, ...hop(t / HOP), pose: up };
-    if (sd.phase === 'alert') return { ...base, side: true, rise: 0, pose: up };
-    if (sd.phase === 'settle') {
-      return { ...base, side: true, rise: 0, pose: { headUp: 1 - ease(5, 15), armDown: ease(20, 25), tailDown: ease(40, 10), lids: ease(50, 25), breath: 0 } };
-    }
-    if (sd.phase === 'asleep') {
-      return { ...base, side: true, rise: 0, pose: { headUp: 0, armDown: 1, tailDown: 1, lids: 1, breath: (Math.sin((t / 60 / 3.4) * Math.PI * 2) + 1) / 2 } };
-    }
-    // Waking: eyes open, gather up, then the hop back down (from the side, then from above).
-    if (t < 30) return { ...base, side: true, rise: 0, pose: { headUp: ease(6, 10), armDown: 1 - ease(10, 12), tailDown: 1 - ease(14, 12), lids: 1 - ease(0, 6), breath: 0 } };
-    return { ...base, ...hop((t - 30) / HOP), side: (t - 30) / HOP < 0.5, pose: up };
-  }
-
-  /** Napping, seen from the side: the box it covers (art px). */
-  private napBox() {
-    const v = this.napView;
-    if (!v || !v.side) return null;
-    const x0 = v.face > 0 ? v.x : v.x - NAP_W;
-    return { x: x0, y: v.ledge - 8, w: NAP_W, h: 12 };
+    return this.state === STATE.NAP && sd.tilt > 0 ? { pivot: sd.ledge, amount: sd.tilt } : null;
   }
 
   /** Fast asleep, curled up with its eyes shut: the Z's come out. */
   get dozing() {
-    return (this.body.curl > 0.9 && this.body.lid > 0.9 && this.state === STATE.SLEEP && !this.sleepPeeking) || (this.state === STATE.NAP && this.stateData.phase === 'asleep' && this.stateData.t > 60);
+    return (this.body.curl > 0.9 && this.body.lid > 0.9 && this.state === STATE.SLEEP && !this.sleepPeeking) || (this.state === STATE.NAP && this.stateData.phase === 'asleep' && this.stateData.t > 45);
   }
 
   /** The block it means to nap on. */
@@ -1668,8 +1636,6 @@ export class Personality {
   /** Shortest distance from (x, y) to the head and trunk as drawn (lifted by height). */
   bodyDistance(x: number, y: number) {
     const b = this.body;
-    const nap = this.napBox();
-    if (nap) return Math.hypot(Math.max(nap.x - x, 0, x - (nap.x + nap.w)), Math.max(nap.y - y, 0, y - (nap.y + nap.h)));
     let best = Infinity;
     for (let i = 0; i < TAIL_FIRST; i += 2) {
       const p = b.project(b.pts[i].x, b.pts[i].y, b.z[i]);
@@ -1910,9 +1876,10 @@ export class Personality {
 
     // ── Body expression ──
     const sleeping = this.state === STATE.SLEEP;
-    b.curlTarget = sleeping ? 1 : 0;
-    b.lidTarget = sleeping ? (this.sleepPeeking ? 0.25 : 1) : this.petted ? 0.55 : 0;
-    b.breathRate = sleeping || this.state === STATE.BASKING || this.petted ? 0.29 : 0.57;
+    const napping = this.state === STATE.NAP && (this.stateData.phase === 'settle' || this.stateData.phase === 'asleep');
+    b.curlTarget = sleeping || napping ? 1 : 0;
+    b.lidTarget = sleeping ? (this.sleepPeeking ? 0.25 : 1) : this.state === STATE.NAP && this.stateData.lids ? this.stateData.lids : this.petted ? 0.55 : 0;
+    b.breathRate = sleeping || napping || this.state === STATE.BASKING || this.petted ? 0.29 : 0.57;
     b.breathDepth = sleeping ? 0.085 : 0.05;
     b.tailTwitch = this.state === STATE.HUNT && this.stateData.phase === 'ready' ? 1 : this.state === STATE.PLAY ? 0.8 : this.state === STATE.HELD ? 0.8 : this.state === STATE.LURK && (this.stateData.frozen || this.stateData.phase === 'wary') ? 0.5 : this.state === STATE.NIBBLE && this.stateData.phase === 'grab' && this.stateData.stuck ? 0.6 : this.state === STATE.HUNT ? 0.7 : this.state === STATE.STARTLE ? 0.35 : 0;
     if (this.mouthTicks > 0) { this.mouthTicks--; b.mouthTarget = this.mouthTicks > 4 ? 1 : 0.4; }

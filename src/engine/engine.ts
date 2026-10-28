@@ -9,7 +9,6 @@ import { BrainOptions, Ctx, Personality, Playground, STATE } from './personality
 import { Reactions } from './reactions';
 import { GeckoRenderer } from './render';
 import { Zzz } from './zzz';
-import { LEDGE, NAP_W, napTone, paintNap } from './napsprite';
 import { Footprints, Happenings, HoverSim } from './surroundings';
 import { World } from './world';
 
@@ -419,24 +418,9 @@ export class PetEngine {
       for (const c of covers) g.rect(Math.round(c.x * res), Math.round(c.y * res), Math.round(c.w * res), Math.round(c.h * res));
       g.clip('evenodd');
     }
-    // Napping on a block it's drawn from the side; hopping up or down, lifted.
-    const nap = this.brain.napView;
-    let zFrom: { x: number; y: number } | null = null;
-    if (nap?.side) {
-      const x0 = Math.round(nap.face > 0 ? nap.x : nap.x - NAP_W), y0 = Math.round(nap.ledge - nap.rise) - LEDGE;
-      const col = (x: number) => (nap.face > 0 ? x0 + x : x0 + NAP_W - 1 - x);
-      // A soft shadow along the edge it lies on.
-      g.fillStyle = pal.shadow;
-      for (let x = 4; x < NAP_W - 2; x++) g.fillRect(Math.round(col(x) * res), Math.round(nap.ledge * res), Math.ceil(res), Math.ceil(res));
-      paintNap((x, y, tone) => { g.fillStyle = napTone(pal, tone); g.fillRect(Math.round(col(x) * res), Math.round((y0 + y) * res), Math.ceil(res), Math.ceil(res)); }, nap.pose);
-      zFrom = { x: col(NAP_W - 4), y: y0 + 2 };
-    } else {
-      if (nap) g.translate(0, Math.round(-nap.rise * res));
-      this.renderer.draw(g, this.body, pal, res);
-      if (nap) g.translate(0, Math.round(nap.rise * res));
-      const h = this.body.pts[0];
-      if (this.brain.dozing) zFrom = this.body.project(h.x, h.y, this.body.z[0]);
-    }
+    this.renderer.tilt = this.brain.napTilt;
+    this.renderer.draw(g, this.body, pal, res);
+    const zFrom = { x: this.renderer.headAt.x / res, y: this.renderer.headAt.y / res };
     // Fast asleep: Z's.
     this.zzz.draw(g, pal, this.brain.dozing ? zFrom : null, performance.now(), res);
     if (this.brain.carrying) {
