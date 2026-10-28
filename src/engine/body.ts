@@ -209,7 +209,7 @@ export class Body {
   /** Crawling under a panel rather than over the terrain. */
   under = false;
   /** How big the head is relative to the standard profile (width; the neck tapers to match). */
-  headScale = 1;
+  headScale = 1.2;
 
   /** Half-width of the body at spine point i, with the head scaled. */
   width(i: number) {

@@ -216,10 +216,22 @@ export class GeckoRenderer {
     const px = (p: { x: number; y: number }, c: string) => { ctx.fillStyle = c; ctx.fillRect(p.x, p.y, 1, 1); };
     const s0 = (1 + NEARER * Math.max(0, b.z[0])) * res;
 
-    // One dark pixel per eye, on the sides of the skull; closed, it reads as shade.
-    for (const side of [1, -1]) {
-      px(at(3, side * (b.width(3) - 0.5)), b.lid > 0.55 ? pal.shade : pal.eye);
-    }
+    // One dark pixel per eye, on the sides of the skull; closed, it reads as shade. Each is
+    // kept on the head's own pixels — rounding can put an edge pixel just off it, where
+    // the eye would vanish against the page — and the two never share a pixel.
+    const onHead = (p: { x: number; y: number }) => {
+      const ix = p.x - this.bx, iy = p.y - this.by;
+      return ix >= 0 && iy >= 0 && ix < this.bw && iy < this.bh && this.depth[iy * this.bw + ix] > 0;
+    };
+    const eyeAt = (k: number, side: number) => {
+      let off = b.width(k) - 0.5, e = at(k, side * off);
+      while (!onHead(e) && off > 0.3) { off -= 0.35; e = at(k, side * off); }
+      return e;
+    };
+    const left = eyeAt(3, 1);
+    let right = eyeAt(3, -1);
+    for (const k of [4, 2]) if (right.x === left.x && right.y === left.y) right = eyeAt(k, -1);
+    for (const e of [left, right]) px(e, b.lid > 0.55 ? pal.shade : pal.eye);
 
     // Mouth: when open, the snout tip splits.
     const tip = project(b.pts[0].x + fx * 0.9, b.pts[0].y + fy * 0.9, b.z[0]);
