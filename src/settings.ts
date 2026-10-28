@@ -11,7 +11,8 @@ export interface PetSettings {
   nibbleLetters: boolean;
   bugsFromWriting: boolean;
   wordsPerBug: number;
-  bugsFromTasks: boolean;
+  /** Crickets as well as flies (completed tasks bring them out). */
+  crickets: boolean;
   sleepAfterMinutes: number;
   reducedMotion: 'system' | 'on' | 'off';
   /** This gecko's personality, rolled on first run. Not shown in the UI. */
@@ -26,7 +27,7 @@ export const DEFAULT_SETTINGS: PetSettings = {
   nibbleLetters: true,
   bugsFromWriting: true,
   wordsPerBug: 40,
-  bugsFromTasks: true,
+  crickets: false,
   sleepAfterMinutes: 3,
   reducedMotion: 'system',
 };
@@ -84,8 +85,9 @@ export class PixelPetSettingTab extends PluginSettingTab {
         .onChange(async (v) => { s.wordsPerBug = v; await save(); }));
 
     new Setting(containerEl)
-      .setName('Completed tasks bring out crickets')
-      .addToggle((t) => t.setValue(s.bugsFromTasks).onChange(async (v) => { s.bugsFromTasks = v; await save(); }));
+      .setName('Crickets')
+      .setDesc('Crickets as well as flies. Finishing a task brings one out.')
+      .addToggle((t) => t.setValue(s.crickets).onChange(async (v) => { s.crickets = v; await save(); }));
 
     new Setting(containerEl)
       .setName('Falls asleep after')

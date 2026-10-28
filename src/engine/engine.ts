@@ -24,6 +24,8 @@ export interface PetOptions extends BrainOptions {
   debug?: boolean;
   /** The nodes of open graph views, in CSS px, for it to play with. */
   graph?: Playground;
+  /** Crickets as well as flies. */
+  crickets?: boolean;
 }
 
 /** The personality is tuned per 60 Hz tick, so the whole simulation runs on a fixed step. */
@@ -153,6 +155,7 @@ export class PetEngine {
     Object.assign(this.opts, o);
     if (o.color !== undefined) this.refreshPalette();
     if (o.nibble === false) { this.nibbler.clear(); this.brain?.dropLetter(); }
+    if (o.crickets === false) for (const bug of this.swarm.bugs) if (bug.kind === 'cricket') bug.alive = false;
   }
 
   /** The theme or styles changed: new colours, and new hover styles to copy. */
@@ -284,7 +287,7 @@ export class PetEngine {
     if (cmd === 'eat') {
       // Something to eat turns up near it.
       const h = this.body.head;
-      this.swarm.spawn(Math.random() < 0.5 ? 'cricket' : 'fly', this.world, { x: h.x, y: h.y });
+      this.swarm.spawn(this.opts.crickets && Math.random() < 0.5 ? 'cricket' : 'fly', this.world, { x: h.x, y: h.y });
     }
     return said;
   }

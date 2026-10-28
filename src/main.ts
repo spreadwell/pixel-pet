@@ -23,7 +23,7 @@ export default class PixelPetPlugin extends Plugin {
     this.addRibbonIcon('paw-print', 'Toggle pet', () => this.toggle());
     this.addCommand({ id: 'toggle', name: 'Show or hide the pet', callback: () => this.toggle() });
     this.addCommand({ id: 'summon', name: 'Call the pet over', callback: () => this.engine?.summon() });
-    this.addCommand({ id: 'release-bug', name: 'Release a bug', callback: () => this.engine?.spawnBug(Math.random() < 0.6 ? 'fly' : 'cricket') });
+    this.addCommand({ id: 'release-bug', name: 'Release a bug', callback: () => this.engine?.spawnBug(this.settings.crickets && Math.random() < 0.4 ? 'cricket' : 'fly') });
     this.registerView(PANEL_VIEW, (leaf) => new PetPanel(leaf, () => this.engine));
     this.addCommand({ id: 'open-panel', name: 'Open pet panel', callback: () => this.openPanel() });
 
@@ -66,6 +66,7 @@ export default class PixelPetPlugin extends Plugin {
       color: s.colorMode === 'accent' ? 'var(--interactive-accent)' : s.customColor,
       traits: s.traits,
       nibble: s.nibbleLetters,
+      crickets: s.crickets,
       sleepAfterMs: s.sleepAfterMinutes * 60_000,
       reducedMotion: reduced,
       graph: this.graph,
@@ -136,7 +137,7 @@ export default class PixelPetPlugin extends Plugin {
     }, 1200));
   }
 
-  /** Writing attracts flies; completed tasks bring out crickets. */
+  /** Writing attracts flies; completed tasks bring out crickets, if they're on. */
   private feed(key: string, text: string) {
     const words = text.match(WORD)?.length ?? 0;
     const tasks = text.match(DONE_TASK)?.length ?? 0;
@@ -154,7 +155,7 @@ export default class PixelPetPlugin extends Plugin {
       }
       this.wordBank = Math.min(this.wordBank, s.wordsPerBug);
     }
-    if (s.bugsFromTasks && tasks > before.tasks) {
+    if (s.crickets && tasks > before.tasks) {
       for (let i = 0; i < Math.min(2, tasks - before.tasks); i++) this.engine.spawnBug('cricket');
     }
   }
