@@ -1,4 +1,4 @@
-import { Body, Drive, NEARER, TAIL_FIRST } from './body';
+import { Body, Drive, HIP as HIP_SEG, NEARER, TAIL_FIRST } from './body';
 import type { Bug, Particles, Swarm } from './bugs';
 import type { InputTracker } from './input';
 import { Rect, angleDiff, clamp, lerp, rand, smoothstep } from './math';
@@ -915,8 +915,11 @@ const StateHandlers: Record<State, Handler> = {
       // goes over it.
       // Right at the edge, so turning the view to side-on and back doesn't slide it up or down.
       const face = h.x < r.x + r.w / 2 ? 1 : -1, x = face > 0 ? r.x + 20 : r.x + r.w - 20, y = r.y - 1;
-      g.stateData = { phase: 'go', face, spot: { x: x - face * 14, y }, end: { x, y }, corner: face > 0 ? r.x : r.x + r.w, ledge: r.y, tilt: 0, stand: 1, droop: 0, front: 0, hind: 0, lids: 0, sleepFor: 600 + Math.random() * 900, t: 0 };
-      g.planRoute(x - face * 14, y);
+      // It comes in from just past the block's end, along the edge, so it's lying straight
+      // along it with its tail trailing out over the end.
+      const corner = face > 0 ? r.x : r.x + r.w, far = face > 0 ? r.x + r.w - 14 : r.x + 14;
+      g.stateData = { phase: 'go', face, spot: { x: corner - face * 12, y }, end: { x, y }, far, corner, ledge: r.y, tilt: 0, stand: 1, droop: 0, front: 0, hind: 0, lids: 0, sleepFor: 600 + Math.random() * 900, t: 0 };
+      g.planRoute(corner - face * 12, y);
     },
     update(g) {
       const sd = g.stateData, head = g.head, b = g.body;
@@ -929,9 +932,14 @@ const StateHandlers: Record<State, Handler> = {
           g.targetAngle = Math.atan2(wp.y - head.y, wp.x - head.x);
           return { targetSpeed: g.speed * 0.8 };
         }
-        case 'line':
-          // Along the edge, so it's lying the right way when it settles.
-          if ((head.x - sd.end.x) * sd.face > -1 || sd.t > 240) {
+        case 'line': {
+          // Along the edge, so it's lying the right way when it settles — and not until
+          // it's lined up with it: if it isn't yet, a few more steps along.
+          const along = sd.face > 0 ? 0 : Math.PI;
+          // (Facing along it will do: as it settles the body straightens out behind the head.)
+          const lined = Math.abs(angleDiff(b.heading, along)) < 0.15 && (b.pts[HIP_SEG].x - b.pts[2].x) * sd.face < 0;
+          if ((head.x - sd.end.x) * sd.face > -1 && !lined && (sd.end.x - sd.far) * sd.face < 0) sd.end.x += sd.face * 4;
+          if (((head.x - sd.end.x) * sd.face > -1 && lined) || sd.t > 360) {
             sd.phase = 'settle'; sd.t = 0;
             b.curlStyle = 'drape';
             // The animal's left is up the screen when it faces right: turn the tail the
@@ -941,6 +949,7 @@ const StateHandlers: Record<State, Handler> = {
           }
           g.targetAngle = Math.atan2(sd.end.y - head.y, sd.end.x - head.x);
           return { targetSpeed: g.speed * 0.5 };
+        }
         case 'settle':
           // The view turns side-on while it stands; it lies down; the arm, then the leg,
           // slips over the edge; the tail slides over the end and droops; its eyes drift
