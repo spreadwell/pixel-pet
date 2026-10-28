@@ -954,29 +954,30 @@ const StateHandlers: Record<State, Handler> = {
           if (sd.t >= 170) { sd.phase = 'asleep'; sd.t = 0; }
           break;
         case 'wake': {
-          // Waking: the eye opens and it lies a moment, tasting the air; it gathers the arm
-          // and the leg back up and pushes itself up onto its legs; then it sets off, the
-          // tail lifting and the view turning back as it goes.
+          // Waking, it steps out of it: the eye opens and it lies a moment, tasting the air;
+          // then, already stepping off, it draws the arm up into its first step, rises onto
+          // its legs mid-stride while the tail lifts off the edge behind it, and the view
+          // turns back over its next few steps.
           sd.lids = 1 - ease(0, 5);
           if (sd.t === 12) g.flick();
-          if (sd.t === 24) g.headLook.look();
-          sd.front = 1 - ease(30, 8);
-          sd.hind = 1 - ease(36, 8);
-          // Up front first — it pushes its chest up on its arms — then the hips follow.
-          b.pushup = 1.8 * (ease(36, 8) - ease(48, 10));
-          sd.stand = ease(42, 12);
-          sd.droop = 1 - ease(46, 14);
-          sd.tilt = 1 - ease(54, 22);
+          sd.front = 1 - ease(26, 8);
+          sd.hind = 1 - ease(32, 8);
+          sd.stand = ease(28, 16);
+          sd.droop = 1 - ease(34, 16);
+          sd.tilt = 1 - ease(46, 26);
           b.dangle = { front: sd.front, hind: sd.hind };
-          if (sd.t >= 76) {
+          if (sd.t >= 72) {
             // Off along the block the way it's facing, rather than wheeling about.
             const w = g.c.world.clampToBounds(head.x + sd.face * 60, head.y, 10);
-            g.flick();
             g.summon(w);
-            return { targetSpeed: g.speed * 0.5 };
+            return { targetSpeed: g.speed * 0.6 };
           }
-          // Moving off as soon as it's up, and coming out of it on the move.
-          if (sd.t >= 46) { g.targetAngle = sd.face > 0 ? 0 : Math.PI; return { targetSpeed: g.speed * 0.6 * ease(46, 14) }; }
+          if (sd.t >= 24) {
+            g.targetAngle = sd.face > 0 ? 0 : Math.PI;
+            // Straight into its stride: no creeping start.
+            if (sd.t === 24) g.currentSpeed = Math.max(g.currentSpeed, g.speed * 0.3);
+            return { targetSpeed: g.speed * 0.6 };
+          }
           return { targetSpeed: 0 };
         }
       }
