@@ -171,7 +171,7 @@ export class PetEngine {
     // The note in focus — or, asked from the pet panel (which has the focus then), the
     // note showing in the main area.
     const doc = this.win.document;
-    const shown = [...doc.querySelectorAll<HTMLElement>('.mod-root .workspace-leaf-content[data-type="markdown"] .view-content')].find((e) => e.offsetParent !== null);
+    const shown = [...doc.querySelectorAll<HTMLElement>('.mod-root .workspace-leaf-content:is([data-type="markdown"], [data-type="butter-editor"]) .view-content')].find((e) => e.offsetParent !== null);
     const el = asked ? shown : doc.querySelector('.workspace-leaf.mod-active .view-content');
     const r = el?.getBoundingClientRect(), px = this.opts.px;
     this.brain?.newSurroundings(r && r.width > 0 ? { x: r.left / px, y: r.top / px, w: r.width / px, h: r.height / px } : null, asked);

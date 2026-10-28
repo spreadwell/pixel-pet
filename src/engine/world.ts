@@ -27,7 +27,7 @@ const SURFACE_SELECTORS = [
   '.mobile-toolbar',
   '.view-header',
 ];
-const COLUMN_SELECTORS = ['.cm-sizer', '.markdown-preview-sizer'];
+const COLUMN_SELECTORS = ['.cm-sizer', '.markdown-preview-sizer', '.ProseMirror'];
 /** Panels that lie over the note, with the smallest width (art px) that counts. */
 const COVER_SELECTORS: [string, number][] = [
   ['.workspace-ribbon', 8],

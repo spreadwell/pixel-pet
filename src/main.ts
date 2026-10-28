@@ -1,4 +1,4 @@
-import { Editor, MarkdownFileInfo, MarkdownView, Platform, Plugin } from 'obsidian';
+import { Editor, MarkdownFileInfo, MarkdownView, Platform, Plugin, TFile } from 'obsidian';
 import { PetEngine, PetOptions } from './engine/engine';
 import { rollTraits } from './engine/personality';
 import { GraphBalls } from './graph';
@@ -31,6 +31,8 @@ export default class PixelPetPlugin extends Plugin {
     this.registerEvent(this.app.workspace.on('file-open', () => this.engine?.noteChanged()));
     this.registerEvent(this.app.workspace.on('active-leaf-change', () => this.engine?.noteChanged()));
     this.registerEvent(this.app.workspace.on('editor-change', (editor: Editor, info: MarkdownView | MarkdownFileInfo) => this.onEdit(editor, info)));
+    // Editors that don't raise editor-change (Butter Editor, say) still save the note.
+    this.registerEvent(this.app.vault.on('modify', (file) => { if (file instanceof TFile && file.extension === 'md') this.onSaved(file); }));
     this.register(() => { for (const t of this.pending.values()) window.clearTimeout(t); });
 
     this.app.workspace.onLayoutReady(() => { if (this.settings.enabled) this.start(); });
@@ -109,6 +111,18 @@ export default class PixelPetPlugin extends Plugin {
       return;
     }
     this.engine.setOptions(opts);
+  }
+
+  /** A note was saved: count its words and tasks (once things have settled). */
+  private onSaved(file: TFile) {
+    if (!this.engine) return;
+    const key = file.path;
+    const prev = this.pending.get(key);
+    if (prev) window.clearTimeout(prev);
+    this.pending.set(key, window.setTimeout(async () => {
+      this.pending.delete(key);
+      this.feed(key, await this.app.vault.cachedRead(file));
+    }, 1200));
   }
 
   private onEdit(editor: Editor, info: MarkdownView | MarkdownFileInfo) {

@@ -13,7 +13,9 @@ const REGROW_MS = 30000;
 const EATEN_ALPHA = 0.2;
 
 const HIGHLIGHT = 'pixel-pet-nibble';
-const ROOTS = '.workspace-leaf .cm-content, .workspace-leaf .markdown-preview-sizer';
+// Obsidian's editor and reading view, and editors like Butter Editor that render the note
+// in a ProseMirror view.
+const ROOTS = '.workspace-leaf .cm-content, .workspace-leaf .markdown-preview-sizer, .workspace-leaf .ProseMirror';
 
 export interface NibbleTarget { range: Range; ch: string; x: number; y: number; }
 
@@ -60,7 +62,7 @@ export class Nibbler {
         const t = n as Text;
         if (t.data.trim().length < 2) continue;
         const el = t.parentElement;
-        if (!el || el.closest('.cm-widgetBuffer, .cm-fold-indicator, .collapse-indicator, input, code, .frontmatter-container, .metadata-container')) continue;
+        if (!el || el.closest('.cm-widgetBuffer, .cm-fold-indicator, .collapse-indicator, input, code, .frontmatter-container, .metadata-container, .ProseMirror-widget')) continue;
         nodes.push(t);
       }
     }
