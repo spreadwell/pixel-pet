@@ -1,7 +1,7 @@
 {
   "id": "pixel-pet",
   "name": "Pixel Pet",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "minAppVersion": "1.7.2",
   "description": "A pixel pet that lives in your workspace. It explores your notes, naps on your code blocks, plays in your graph and hunts the bugs your writing attracts. Starts with a gecko.",
   "author": "Spreadwell",
