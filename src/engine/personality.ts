@@ -1259,7 +1259,7 @@ export class Personality {
     const caret = c.world.caret;
     if (this.state !== STATE.LURK && this.lurkCooldown <= 0 && this.calm && caret && this.typing && Math.random() < 0.008) {
       const d = this.distTo(caret.x, caret.y);
-      if (d > 30 && d < 240) this.enterState(STATE.LURK);
+      if (d > 30) this.enterState(STATE.LURK);
     }
     // You wrote something and stopped: come and have a look.
     if (this.calm && c.world.lastCaret && c.input.claimFreshInk(c.now)) {
