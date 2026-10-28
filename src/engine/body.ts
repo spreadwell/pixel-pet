@@ -191,6 +191,8 @@ export class Body {
   curl = 0;              // 0 straight → 1 curled up in a C (sleep)
   curlTarget = 0;
   curlDir: 1 | -1 = 1;
+  /** Lying along a ledge: how far the front and hind leg on the ledge side have let go and hang over it, 0..1. */
+  dangle = { front: 0, hind: 0 };
   /** How it lies when it settles: curled round in a C, or stretched out with its tail turned off to one side (over a ledge). */
   curlStyle: 'coil' | 'drape' = 'coil';
 
@@ -434,7 +436,7 @@ export class Body {
 
     // ── Legs ────────────────────────────────────────────────
     this.placeLegs(false, dt);
-    if (this.curlStyle === 'drape' && this.curl > 0) this.dangleLegs();
+    if (this.dangle.front > 0 || this.dangle.hind > 0) this.dangleLegs();
     this.lifeSignals(dt);
   }
 
@@ -448,7 +450,9 @@ export class Body {
       // Out to the ledge side: the animal's left is (f.y, -f.x).
       const vx = this.curlDir * f.y, vy = -this.curlDir * f.x;
       if ((leg.hip.x - p.x) * vx + (leg.hip.y - p.y) * vy <= 0) continue;
-      const reach = (leg.def.l1 + leg.def.l2) * 0.7, back = leg.def.front ? 0.5 : -0.8, k = this.curl;
+      const k = leg.def.front ? this.dangle.front : this.dangle.hind;
+      if (k <= 0) continue;
+      const reach = (leg.def.l1 + leg.def.l2) * 0.7, back = leg.def.front ? 0.5 : -0.8;
       const fx = leg.hip.x + vx * reach + f.x * back, fy = leg.hip.y + vy * reach + f.y * back;
       leg.foot.x = lerp(leg.foot.x, fx, k); leg.foot.y = lerp(leg.foot.y, fy, k);
       // A limp, slight bend at the elbow or knee.

@@ -72,6 +72,8 @@ function disc(cx: number, cy: number, r: number, fn: (x: number, y: number, dx: 
  * half, while nearly end-on the shaded side thins away to nothing.
  */
 const SHADE_EDGE = 0.04;
+/** Side-on, how far its legs hold its body up off the ground when it's standing, art px. */
+const STAND = 1.6;
 /** Napping on a block: how quickly the tail turns down over the block's end (art px to turn most of the way). */
 const DROOP = 3;
 
@@ -140,7 +142,7 @@ export class GeckoRenderer {
    * spheres along the spine, resting on the ground, legs reaching down to it — so turning
    * the view moves smoothly from one to the other. Past the edge, it hangs down the front.
    */
-  tilt: { pivot: number; amount: number; end?: number; face?: 1 | -1 } | null = null;
+  tilt: { pivot: number; amount: number; end?: number; face?: 1 | -1; stand?: number; droop?: number } | null = null;
   /** Where the head was drawn last (canvas px), for the Z's. */
   headAt = { x: 0, y: 0 };
   private up = new Float32Array(0);
@@ -175,9 +177,11 @@ export class GeckoRenderer {
     this.fine = Math.max(1, Math.floor(res));
     const a0 = b.pts[2], a1 = b.pts[HIP], axisX = b.pts[12].x;
     const axis = tilt ? clamp((a1.y - a0.y) / (a1.x - a0.x || 1), -0.5, 0.5) : 0;
-    const project: Project = (x, y, z, h = 0, hang = false) => {
+    const project: Project = (x, y, z, h0 = 0, hang = false) => {
       const p = b.project(x, y, z), px = p.x * res;
       if (!tilt) return { x: px, y: p.y * res };
+      // Standing, the body is held up on its legs; lying, it rests on the ground.
+      const h = h0 > 0 ? h0 + (tilt.stand ?? 0) * STAND : 0;
       // The view turns about the line the body lies along (so a body lying a little askew
       // doesn't come out arched or crooked), and as it turns that line settles, level, onto
       // the block's edge, so the belly rests right on it.
@@ -198,7 +202,8 @@ export class GeckoRenderer {
           // Over the corner it droops: turning steadily further down the further it goes,
           // one continuous curve rather than a run, a bend and a drop.
           const { dx, dy } = droop(out / res);
-          const a = this.tiltA;
+          // Until it's let it slide over, the tail sticks out straight past the end.
+          const a = this.tiltA * (tilt.droop ?? 1);
           return { x: lerp(px, end - tilt.face * dx * res, a), y: sy + dy * res * a };
         }
       }

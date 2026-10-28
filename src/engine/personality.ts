@@ -913,7 +913,7 @@ const StateHandlers: Record<State, Handler> = {
       // Lying in from the nearer end, facing along the block, hips at that end so the tail
       // goes over it.
       const face = h.x < r.x + r.w / 2 ? 1 : -1, x = face > 0 ? r.x + 20 : r.x + r.w - 20, y = r.y - 3;
-      g.stateData = { phase: 'go', face, spot: { x: x - face * 14, y }, end: { x, y }, corner: face > 0 ? r.x : r.x + r.w, ledge: r.y, tilt: 0, sleepFor: 600 + Math.random() * 900, t: 0 };
+      g.stateData = { phase: 'go', face, spot: { x: x - face * 14, y }, end: { x, y }, corner: face > 0 ? r.x : r.x + r.w, ledge: r.y, tilt: 0, stand: 1, droop: 0, front: 0, hind: 0, lids: 0, sleepFor: 600 + Math.random() * 900, t: 0 };
       g.planRoute(x - face * 14, y);
     },
     update(g) {
@@ -940,16 +940,32 @@ const StateHandlers: Record<State, Handler> = {
           g.targetAngle = Math.atan2(sd.end.y - head.y, sd.end.x - head.x);
           return { targetSpeed: g.speed * 0.5 };
         case 'settle':
-          sd.tilt = ease(0, 50);
-          sd.lids = ease(45, 30);
-          if (sd.t >= 80) { sd.phase = 'asleep'; sd.t = 0; }
+          // The view turns side-on while it stands; it lies down; the arm, then the leg,
+          // slips over the edge; the tail slides over the end and droops; its eyes drift
+          // half shut, a while later all the way.
+          sd.tilt = ease(0, 30);
+          sd.stand = 1 - ease(36, 24);
+          sd.front = ease(62, 14);
+          sd.hind = ease(78, 14);
+          sd.droop = ease(92, 30);
+          sd.lids = ease(122, 10) * 0.5 + ease(146, 20) * 0.5;
+          if (sd.t === 40) g.flick();
+          if (sd.t >= 170) { sd.phase = 'asleep'; sd.t = 0; }
           break;
         case 'wake':
-          sd.lids = 1 - ease(0, 8);
-          sd.tilt = 1 - ease(8, 36);
-          if (sd.t >= 46) { g.blink(); g.flick(); return { targetSpeed: 0, transition: STATE.IDLE }; }
+          // The same in reverse, and quicker: eyes open, tail and limbs up, up on its
+          // legs, the view turns back.
+          sd.lids = 1 - ease(0, 6);
+          sd.droop = 1 - ease(6, 12);
+          sd.hind = 1 - ease(8, 10);
+          sd.front = 1 - ease(10, 10);
+          sd.stand = ease(20, 12);
+          sd.tilt = 1 - ease(30, 18);
+          if (sd.t >= 50) { g.blink(); g.flick(); return { targetSpeed: 0, transition: STATE.IDLE }; }
+          b.dangle = { front: sd.front, hind: sd.hind };
           return { targetSpeed: 0 };
       }
+      b.dangle = { front: sd.front, hind: sd.hind };
       // Settling or asleep. The block scrolled away or the note changed under it: up.
       if (!g.c.world.rockAt(b.pts[12].x, sd.ledge + 2)) return { targetSpeed: 0, transition: STATE.IDLE };
       if (g.userIdle) sd.sleepFor = Math.max(sd.sleepFor, sd.t + 60);
@@ -1155,9 +1171,9 @@ export class Personality {
   /** Ticks until it will start another game with the graph. */
   playCooldown = 0;
   /** Napping on a block: the view turned over about its edge, and how far (see GeckoRenderer.tilt). */
-  get napTilt(): { pivot: number; amount: number; end: number; face: 1 | -1 } | null {
+  get napTilt(): { pivot: number; amount: number; end: number; face: 1 | -1; stand: number; droop: number } | null {
     const sd = this.stateData;
-    return this.state === STATE.NAP && sd.tilt > 0 ? { pivot: sd.ledge, amount: sd.tilt, end: sd.corner, face: sd.face } : null;
+    return this.state === STATE.NAP && sd.tilt > 0 ? { pivot: sd.ledge, amount: sd.tilt, end: sd.corner, face: sd.face, stand: sd.stand, droop: sd.droop } : null;
   }
 
   /** Fast asleep, curled up with its eyes shut: the Z's come out. */
@@ -1297,7 +1313,7 @@ export class Personality {
     if (this.carrying && state !== STATE.NIBBLE) { this.c.reactions.finish(false); this.carrying = false; }
     this.display = null;
     if (this.state === STATE.PLAY && this.stateData.id) this.c.graph?.letGo(this.stateData.id);
-    if (this.state === STATE.NAP) this.napCooldown = 3600 + Math.random() * 3600;
+    if (this.state === STATE.NAP) { this.napCooldown = 3600 + Math.random() * 3600; this.body.dangle = { front: 0, hind: 0 }; }
     // Coming to rest under a panel (after a dash, say) is hiding: it will peek out.
     if ((state === STATE.IDLE || state === STATE.BASKING) && this.body.under && this.c.world.coverAt(this.head.x, this.head.y) && this.findCover(200)) {
       state = STATE.HIDE;
