@@ -1,5 +1,6 @@
 import { Body, Leg, NEARER, SPINE } from './body';
 import type { Palette } from './palette';
+import { lerp } from './math';
 
 /*
  * Pixel renderer for the gecko, in the flat two-tone style of classic lizard sprites:
@@ -59,6 +60,8 @@ function disc(cx: number, cy: number, r: number, fn: (x: number, y: number, dx: 
  * half, while nearly end-on the shaded side thins away to nothing.
  */
 const SHADE_EDGE = 0.04;
+/** Half-width of the pinched neck, art px: about two pixels across. */
+const NECK_HALF = 1.05;
 
 // Light falls from the upper left of the screen, whichever way the animal faces.
 const LIGHT = { x: -0.6, y: -0.8 };
@@ -93,6 +96,8 @@ export class GeckoRenderer {
   private snappedShadow = new Map<Leg, Snapped>();
   /** A pointed snout, no stray pixels on the head's outline, and eyes held steady. */
   steadyHead = true;
+  /** Carve the neck narrower than the head and shoulders, whichever way it faces. */
+  pinchNeck = true;
   /** The eye pixels last drawn (left, right), held like the leg joints so they don't flicker. */
   private eyes: ({ x: number; y: number } | null)[] = [null, null];
 
@@ -109,6 +114,7 @@ export class GeckoRenderer {
 
     this.frame(b, project, res);
     this.rasteriseBody(b, project, res);
+    if (this.pinchNeck) this.carveNeck(b, project, res);
     if (this.steadyHead) this.taperSnout(b, project, res);
     const legs = this.legPixels(b, pal, project, this.snapped, res);
 
@@ -200,6 +206,39 @@ export class GeckoRenderer {
           this.lat[k] = (f.x * dy - f.y * dx) / (r + 0.001);
         }
       });
+    }
+  }
+
+  /**
+   * A neck. The back of the head and the front of the shoulders are discs wide enough to
+   * meet across it, so at most angles the head ran straight into the body. Whatever drew
+   * them, pixels in the neck that lie further from the spine than a neck's half-width go.
+   */
+  private carveNeck(b: Body, project: Project, res: number) {
+    const { bw, bh, bx, by, depth } = this;
+    const FIRST = 3, LAST = 9;
+    const q: { x: number; y: number }[] = [];
+    for (let i = FIRST; i <= LAST; i++) q.push(project(b.pts[i].x, b.pts[i].y, b.z[i]));
+    // Allowed half-width along the spine (index units): pinched to about two pixels
+    // across from just behind the skull to just before the shoulders.
+    const half = (s: number) => (s < 4.4 || s > 7.6 ? Infinity : s < 5 ? lerp(2, NECK_HALF, (s - 4.4) / 0.6) : s > 7 ? lerp(NECK_HALF, 1.9, (s - 7) / 0.6) : NECK_HALF);
+    const c = q[6 - FIRST], reach = 5 * res;
+    for (let y = Math.max(0, Math.floor(c.y - reach) - by); y <= Math.min(bh - 1, Math.ceil(c.y + reach) - by); y++) {
+      for (let x = Math.max(0, Math.floor(c.x - reach) - bx); x <= Math.min(bw - 1, Math.ceil(c.x + reach) - bx); x++) {
+        const k = y * bw + x;
+        if (depth[k] <= 0) continue;
+        const px = bx + x + 0.5, py = by + y + 0.5;
+        // Nearest point on the spine between the skull and the shoulders.
+        let best = Infinity, s = 0;
+        for (let j = 0; j < q.length - 1; j++) {
+          const ax = q[j].x, ay = q[j].y, ex = q[j + 1].x - ax, ey = q[j + 1].y - ay;
+          const len2 = ex * ex + ey * ey || 1;
+          const u = Math.max(0, Math.min(1, ((px - ax) * ex + (py - ay) * ey) / len2));
+          const d2 = (px - ax - ex * u) ** 2 + (py - ay - ey * u) ** 2;
+          if (d2 < best) { best = d2; s = FIRST + j + u; }
+        }
+        if (Math.sqrt(best) / res > half(s)) depth[k] = 0;
+      }
     }
   }
 
