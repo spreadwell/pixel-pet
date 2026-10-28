@@ -461,9 +461,10 @@ export class PetEngine {
     this.last = t;
 
     // A sleeping gecko with nothing around only needs a few frames a second, and on
-    // battery-powered devices the frame rate is capped.
+    // battery-powered devices the frame rate is capped, except while it's moving fast
+    // (a strike, a bolt, play, being carried), which at the cap would look like jumps.
     const quiet = this.brain.state === STATE.SLEEP && !this.swarm.bugs.length && !this.particles.active && !this.prints.active;
-    const minFrame = quiet ? 1 / 12 : this.opts.maxFps ? 1 / this.opts.maxFps : 0;
+    const minFrame = quiet ? 1 / 12 : this.opts.maxFps && !this.brain.quick ? 1 / this.opts.maxFps : 0;
     this.frameAcc += dt;
     if (this.frameAcc < minFrame - 0.002) return;
     this.acc += Math.min(0.25, this.frameAcc);
