@@ -355,13 +355,9 @@ export class GeckoRenderer {
     // Mouth: when open, the snout tip splits.
     const tip = project(b.pts[0].x + fx * 0.9, b.pts[0].y + fy * 0.9, b.z[0]);
     if (b.mouth > 0.35) {
-      // Agape (a yawn, a pounce): the jaws spread and the pink of the mouth shows a pixel
-      // further back between them.
-      const wide = b.mouth > 0.8, j = (wide ? 1.6 : 1.1) * s0;
       px({ x: Math.floor(tip.x), y: Math.floor(tip.y) }, pal.tongue);
-      if (wide) px({ x: Math.floor(tip.x - fx * s0), y: Math.floor(tip.y - fy * s0) }, pal.tongue);
-      px({ x: Math.floor(tip.x + lx * j), y: Math.floor(tip.y + ly * j) }, pal.shade);
-      px({ x: Math.floor(tip.x - lx * j), y: Math.floor(tip.y - ly * j) }, pal.shade);
+      px({ x: Math.floor(tip.x + lx * 1.1 * s0), y: Math.floor(tip.y + ly * 1.1 * s0) }, pal.shade);
+      px({ x: Math.floor(tip.x - lx * 1.1 * s0), y: Math.floor(tip.y - ly * 1.1 * s0) }, pal.shade);
     }
 
     const t = b.tongue;

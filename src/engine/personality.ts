@@ -5,6 +5,7 @@ import { Rect, angleDiff, clamp, lerp, rand, smoothstep } from './math';
 import type { NibbleTarget, Nibbler } from './nibble';
 import type { Palette } from './palette';
 import type { Reactions } from './reactions';
+import { SideNap, napBox } from './sidenap';
 import { Waypoint, findRoute } from './route';
 import type { CoverEntry, World } from './world';
 
@@ -188,6 +189,7 @@ export const STATE = {
   SCOUT: 'scout',
   RETREAT: 'retreat',
   PLAY: 'play',
+  NAP: 'nap',
 } as const;
 export type State = (typeof STATE)[keyof typeof STATE];
 
@@ -254,10 +256,8 @@ const StateHandlers: Record<State, Handler> = {
         nextTongueTime: 40 + Math.random() * 80,
         nextBlinkTime: 30 + Math.random() * 60,
       };
-      // Now and then, a push-up display or a yawn while it stands there.
-      const r = Math.random();
-      if (r < 0.15) g.schedulePushups(10 + Math.random() * 30);
-      else if (r < 0.25 + g.needs.sleepiness * 0.15) g.scheduleYawn(10 + Math.random() * 30);
+      // Now and then, a push-up display while it stands there.
+      if (Math.random() < 0.15) g.schedulePushups(10 + Math.random() * 30);
     },
     update(g) {
       const t = g.stateTimer, d = g.stateData;
@@ -271,6 +271,7 @@ const StateHandlers: Record<State, Handler> = {
         if (g.letter) return { targetSpeed: 0.05 * S, transition: STATE.NIBBLE };
         if (g.wantsCover()) return { targetSpeed: 0.05 * S, transition: STATE.HIDE };
         if (g.wantsToPlay()) return { targetSpeed: 0.05 * S, transition: STATE.PLAY };
+        if (g.wantsNap()) return { targetSpeed: 0.05 * S, transition: STATE.NAP };
         const nearHome = homeDist < 80 * S;
         const r = Math.random();
         if (nearHome && g.needs.fullness > 0.6 && r < g.needs.fullness) return { targetSpeed: 0.05 * S, transition: STATE.BASKING };
@@ -288,9 +289,7 @@ const StateHandlers: Record<State, Handler> = {
       const baseDur = g.traits.resolve('baskDuration');
       const fullBonus = nearHome && g.needs.hunger > 70 ? g.needs.fullness * baseDur * 1.5 : 0;
       g.stateData = { duration: baseDur + Math.random() * baseDur * 1.5 + fullBonus, nextLookTime: 60 + Math.random() * 80, nextBlinkTime: 40 + Math.random() * 50 };
-      const r = Math.random(), when = 40 + Math.random() * Math.max(0, g.stateData.duration - 120);
-      if (r < 0.2) g.schedulePushups(when);
-      else if (r < 0.4 + g.needs.sleepiness * 0.2) g.scheduleYawn(when);
+      if (Math.random() < 0.2) g.schedulePushups(40 + Math.random() * Math.max(0, g.stateData.duration - 120));
     },
     update(g) {
       const t = g.stateTimer, d = g.stateData;
@@ -301,6 +300,7 @@ const StateHandlers: Record<State, Handler> = {
       if (t > d.duration) {
         if (g.needs.canSleep()) return { targetSpeed: 0, transition: g.distTo(g.homeX, g.homeY) < 60 * S ? STATE.SLEEP : STATE.EXPLORE };
         if (g.letter) return { targetSpeed: 0, transition: STATE.NIBBLE };
+        if (g.wantsNap()) return { targetSpeed: 0, transition: STATE.NAP };
         return { targetSpeed: 0, transition: Math.random() < 0.6 ? STATE.EXPLORE : STATE.IDLE };
       }
       return { targetSpeed: 0 };
@@ -466,9 +466,8 @@ const StateHandlers: Record<State, Handler> = {
       g.angle = lerpAngle(g.angle, g.targetAngle, 0.5);
     },
     update(g) {
-      // Bolt for the nearest cover leading away from the threat — a code block or callout
-      // to dive under (or a panel, when that's on) — if there is one.
-      if (g.stateTimer === 1 && g.findCover(110, { x: g.threatX, y: g.threatY })) { g.hideFast = true; return { targetSpeed: g.speed, transition: STATE.HIDE }; }
+      // Bolt for the nearest panel leading away from the threat, if there is one.
+      if (HIDING && g.stateTimer === 1 && g.findCover(110, { x: g.threatX, y: g.threatY })) { g.hideFast = true; return { targetSpeed: g.speed, transition: STATE.HIDE }; }
       const mult = g.mildScare || g.c.opts.reducedMotion ? 1.2 : g.traits.resolve('fleeMultiplier');
       const targetSpeed = g.speed * mult;
       g.targetAngle += Math.sin(g.burstTimer * 0.3) * 0.15;
@@ -744,40 +743,32 @@ const StateHandlers: Record<State, Handler> = {
     },
   },
 
-  // A new note: a brisk lap round its edges, stopping at each corner to look about and
-  // taste the air, before settling in.
+  // A new note: it goes exploring what's in it — up over the paragraphs, headings and
+  // blocks, top to bottom or bottom to top from whichever end is nearer — stopping on each
+  // to look about and taste the words, before settling in.
   [STATE.SCOUT]: {
     enter(g) {
-      const a = g.scoutArea!, w = g.c.world, m = 14;
-      const corners = [
-        { x: a.x + m, y: a.y + m }, { x: a.x + a.w - m, y: a.y + m },
-        { x: a.x + a.w - m, y: a.y + a.h - m }, { x: a.x + m, y: a.y + a.h - m },
-      ].map((p) => w.clampToBounds(p.x, p.y, 8));
-      let first = 0;
-      corners.forEach((p, i) => { if (g.distTo(p.x, p.y) < g.distTo(corners[first].x, corners[first].y)) first = i; });
-      // Round the way it is already facing, if it can.
-      const next = corners[(first + 1) % 4], prev = corners[(first + 3) % 4];
-      const dir = Math.abs(angleDiff(g.angle, Math.atan2(next.y - g.head.y, next.x - g.head.x))) < Math.abs(angleDiff(g.angle, Math.atan2(prev.y - g.head.y, prev.x - g.head.x))) ? 1 : 3;
-      g.stateData = { corners: [0, 1, 2, 3].map((k) => corners[(first + k * dir) % 4]), i: 0, pause: 0, leg: 0 };
+      g.stateData = { stops: g.scoutStops, i: 0, pause: 0, leg: 0 };
       g.flick();
     },
     update(g) {
       const sd = g.stateData, head = g.head;
       if (sd.pause > 0) {
+        // Sniffing the words: head dipping about, tongue going.
+        if (sd.pause % 22 === 0) g.flick();
+        if (sd.pause % 30 === 15) g.headLook.look();
         if (--sd.pause <= 0) { sd.pause = 0; sd.i++; sd.leg = 0; }
         return { targetSpeed: 0 };
       }
-      if (sd.i >= sd.corners.length) return { targetSpeed: 0, transition: STATE.IDLE };
-      const c = sd.corners[sd.i];
-      if (dist(head.x, head.y, c.x, c.y) < 8 || ++sd.leg > 600) {
-        sd.pause = 25 + Math.random() * 30;
-        g.headLook.look();
-        if (Math.random() < 0.6) g.flick();
+      if (sd.i >= sd.stops.length) return { targetSpeed: 0, transition: STATE.IDLE };
+      const c = sd.stops[sd.i];
+      if (dist(head.x, head.y, c.x, c.y) < 6 || ++sd.leg > 500) {
+        sd.pause = 40 + Math.floor(Math.random() * 40);
         return { targetSpeed: 0 };
       }
       const wp = g.waypoint(c.x, c.y);
       g.targetAngle = Math.atan2(wp.y - head.y, wp.x - head.x);
-      return { targetSpeed: g.speed * 1.4 };
+      return { targetSpeed: g.speed * 1.2 };
     },
   },
 
@@ -912,6 +903,45 @@ const StateHandlers: Record<State, Handler> = {
     },
   },
 
+  // A nap on a code block or callout: it goes over to a top corner of the block and climbs
+  // up — and there, seen from the side, it lies stretched out along the top with its tail
+  // hanging over the edge, and dozes off. Bring the pointer close and it wakes.
+  [STATE.NAP]: {
+    enter(g) {
+      const r = g.napRock!, h = g.head;
+      // The nearer top corner; it lies along the top facing in.
+      const left = Math.abs(h.x - r.x) < Math.abs(h.x - (r.x + r.w));
+      const face: 1 | -1 = left ? 1 : -1, corner = left ? r.x : r.x + r.w;
+      g.stateData = { phase: 'go', face, corner, top: r.y, spot: { x: corner + face * 16, y: r.y - 2 }, sleepFor: 600 + Math.random() * 900 };
+      g.planRoute(corner + face * 16, r.y - 2);
+    },
+    update(g) {
+      const sd = g.stateData, head = g.head, w = g.c.world;
+      if (sd.phase === 'go') {
+        if (g.arrived(sd) || g.stateTimer > 600) {
+          sd.phase = 'asleep'; sd.from = g.stateTimer;
+          g.sideNap = { x: sd.corner, y: sd.top, face: sd.face };
+          return { targetSpeed: 0 };
+        }
+        const wp = g.waypoint(sd.spot.x, sd.spot.y);
+        g.targetAngle = Math.atan2(wp.y - head.y, wp.x - head.x);
+        return { targetSpeed: g.speed * 0.8 };
+      }
+      const n = g.sideNap!;
+      // The block scrolled away or the note changed under it: awake, and back to it.
+      if (!w.rockAt(n.x + n.face * 4, n.y + 2)) return { targetSpeed: 0, transition: STATE.IDLE };
+      if (g.userIdle) sd.sleepFor = Math.max(sd.sleepFor, g.stateTimer - sd.from + 60);
+      const p = g.pointer;
+      // A pointer moving about close by wakes it; one already resting there doesn't.
+      if (p && g.cursorSpeed > 0.3 && g.bodyDistance(p.x, p.y) < 18) { g.blink(); g.flick(); return { targetSpeed: 0, transition: STATE.IDLE }; }
+      if (g.stateTimer - sd.from > sd.sleepFor) {
+        g.needs.sleepiness = Math.max(0, g.needs.sleepiness - 0.5);
+        return { targetSpeed: 0, transition: STATE.IDLE };
+      }
+      return { targetSpeed: 0 };
+    },
+  },
+
   // Picked up by the user. The body dangles and squirms; the mind just waits to be let go.
   [STATE.HELD]: {
     enter(g) { g.stateData = {}; g.currentSpeed = 0; },
@@ -935,7 +965,7 @@ const StateHandlers: Record<State, Handler> = {
       // How far the head is past the panel's edge (negative: still outside).
       const depth = (head.x - e.x) * e.nx + (head.y - e.y) * e.ny;
       const out = Math.atan2(-e.ny, -e.nx);
-      if (sd.phase !== 'approach' && !g.c.world.shelterAt(e.x + e.nx * 3, e.y + e.ny * 3)) {
+      if (sd.phase !== 'approach' && !g.c.world.coverAt(e.x + e.nx * 3, e.y + e.ny * 3)) {
         // The panel went away and left it out in the open.
         g.cover = null;
         g.scare(e.x + e.nx * 20, e.y);
@@ -1094,26 +1124,40 @@ export class Personality {
   /** The panel it is heading under or hiding beneath. */
   cover: CoverEntry | null = null;
   hideFast = false;
-  /** A push-up display or a yawn under way or to come: when it starts (state ticks), and for push-ups how many bobs. */
-  display: { kind: 'pushups' | 'yawn'; at: number; bobs: number } | null = null;
-  /** While yawning: how wide the jaws are and how shut the eyes. */
-  gape: { mouth: number; lid: number } | null = null;
-  /** The area of a newly opened note to scout round (art px). */
-  scoutArea: Rect | null = null;
+  /** A push-up display under way or to come: when it starts (state ticks), how many bobs. */
+  display: { at: number; bobs: number } | null = null;
+  /** The places in a newly opened note to go and look at (art px), in order. */
+  scoutStops: { x: number; y: number }[] = [];
   /** Where on a side panel to run to, and where it ran from. */
   retreatTo: { x: number; y: number } | null = null;
   retreatOut: { x: number; y: number } | null = null;
   /** Ticks until it will start another game with the graph. */
   playCooldown = 0;
+  /** Napping on a block, drawn from the side: where, or null. */
+  sideNap: SideNap | null = null;
+  /** The block it means to nap on. */
+  napRock: Rect | null = null;
+  /** Ticks until it will nap on a block again. */
+  napCooldown = 0;
+
+  /** Sleepy, or just in the mood, with a code block or callout close by: nap on it? */
+  wantsNap() {
+    if (this.napCooldown > 0 || (this.needs.sleepiness < 0.25 && Math.random() > 0.12)) return false;
+    const w = this.c.world, h = this.head;
+    let best: Rect | null = null;
+    for (const r of w.rocks) {
+      // Its top edge must be on screen with room above to lie on.
+      if (r.w < 30 || !w.inBounds(r.x + r.w / 2, r.y - 4, 4)) continue;
+      const d = Math.hypot(clamp(h.x, r.x, r.x + r.w) - h.x, r.y - h.y);
+      if (d < 260 && (!best || d < Math.hypot(clamp(h.x, best.x, best.x + best.w) - h.x, best.y - h.y))) best = r;
+    }
+    this.napRock = best;
+    return !!best;
+  }
 
   /** Plan a push-up display `inTicks` from now in this state: two to four bobs. */
   schedulePushups(inTicks: number) {
-    this.display = { kind: 'pushups', at: this.stateTimer + inTicks, bobs: 2 + Math.floor(Math.random() * 3) };
-  }
-
-  /** Plan a yawn `inTicks` from now in this state. */
-  scheduleYawn(inTicks: number) {
-    this.display = { kind: 'yawn', at: this.stateTimer + inTicks, bobs: 0 };
+    this.display = { at: this.stateTimer + inTicks, bobs: 2 + Math.floor(Math.random() * 3) };
   }
 
   /** In a graph view with a node close by, and not played lately: fancy a game? */
@@ -1129,9 +1173,7 @@ export class Personality {
    */
   pushups(): boolean {
     const d = this.display, b = this.body;
-    this.gape = null;
     if (!d || this.stateTimer < d.at) { b.pushup = 0; return false; }
-    if (d.kind === 'yawn') return this.yawn(this.stateTimer - d.at);
     const BOB = 32, t = this.stateTimer - d.at;
     if (t >= BOB * d.bobs) {
       this.display = null;
@@ -1142,26 +1184,6 @@ export class Personality {
     const u = (t % BOB) / BOB, first = t < BOB ? 1.15 : 1;
     const lift = u < 0.35 ? smoothstep(u / 0.35) : u < 0.55 ? 1 : 1 - smoothstep((u - 0.55) / 0.45);
     b.pushup = 3.4 * first * lift;
-    this.headLook.lookAt(0);
-    return true;
-  }
-
-  /**
-   * A yawn: head tips up, eyes squeeze shut and the jaws gape wide for a long moment,
-   * then close, with a lick to finish. True while it is yawning.
-   */
-  yawn(t: number): boolean {
-    const b = this.body, OPEN = 16, HOLD = 56, END = 74;
-    if (t >= END) {
-      this.display = null;
-      b.pushup = 0;
-      b.flickTongue('lick');
-      this.stateData.duration = Math.max(this.stateData.duration ?? 0, this.stateTimer + 20);
-      return false;
-    }
-    const k = t < OPEN ? smoothstep(t / OPEN) : t < HOLD ? 1 : 1 - smoothstep((t - HOLD) / (END - HOLD));
-    b.pushup = 1.2 * k;
-    this.gape = { mouth: k, lid: k };
     this.headLook.lookAt(0);
     return true;
   }
@@ -1220,20 +1242,18 @@ export class Personality {
 
   get body() { return this.c.body; }
   /** The pointer, unless the gecko is under a panel and the pointer is on top of it. */
-  get pointer() { const p = this.c.pointer; return p && !(this.body.under && this.c.world.shelterAt(p.x, p.y)) ? p : null; }
+  get pointer() { const p = this.c.pointer; return p && !(this.body.under && this.c.world.coverAt(p.x, p.y)) ? p : null; }
 
   /** Wary geckos like to get under things. */
   wantsCover() {
-    if (this.hideCooldown > 0) return false;
+    if (!HIDING || this.hideCooldown > 0) return false;
     if (Math.random() > 0.02 + 0.06 * (this.traits.traits.awareness ?? 0.5)) return false;
     this.hideFast = false;
     return this.findCover(150);
   }
 
   findCover(range: number, threat?: { x: number; y: number }) {
-    // Side panels only while panel hiding is on; code blocks and callouts always.
-    const w = this.c.world;
-    this.cover = (HIDING ? w.coverEntry(this.head.x, this.head.y, range, threat) : null) ?? w.rockEntry(this.head.x, this.head.y, range, threat);
+    this.cover = this.c.world.coverEntry(this.head.x, this.head.y, range, threat);
     return !!this.cover;
   }
   get head() { return this.c.body.head; }
@@ -1247,8 +1267,9 @@ export class Personality {
     if (this.carrying && state !== STATE.NIBBLE) { this.c.reactions.finish(false); this.carrying = false; }
     this.display = null;
     if (this.state === STATE.PLAY && this.stateData.id) this.c.graph?.letGo(this.stateData.id);
+    if (this.state === STATE.NAP) { this.sideNap = null; this.napCooldown = 3600 + Math.random() * 3600; }
     // Coming to rest under a panel (after a dash, say) is hiding: it will peek out.
-    if ((state === STATE.IDLE || state === STATE.BASKING) && this.body.under && this.c.world.shelterAt(this.head.x, this.head.y) && this.findCover(200)) {
+    if ((state === STATE.IDLE || state === STATE.BASKING) && this.body.under && this.c.world.coverAt(this.head.x, this.head.y) && this.findCover(200)) {
       state = STATE.HIDE;
       this.hideFast = false;
     }
@@ -1256,7 +1277,7 @@ export class Personality {
     this.stateTimer = 0;
     this.stateData = {};
     StateHandlers[state].enter(this);
-    if (state === STATE.HIDE && this.body.under && this.c.world.shelterAt(this.head.x, this.head.y) && this.stateData.phase === 'approach') {
+    if (state === STATE.HIDE && this.body.under && this.c.world.coverAt(this.head.x, this.head.y) && this.stateData.phase === 'approach') {
       this.stateData.phase = 'under';
       this.stateData.wait = 60 + Math.random() * 120;
     }
@@ -1545,18 +1566,19 @@ export class Personality {
       return;
     }
     if (this.playCooldown <= 0 && this.c.graph?.balls().some((b) => this.distTo(b.x, b.y) < 260)) { this.enterState(STATE.PLAY); return; }
-    if (view && view.w > 80 && view.h > 60 && h.x > view.x && h.x < view.x + view.w && h.y > view.y && h.y < view.y + view.h) {
-      // Round the note's writing, not the whole (often very wide) pane.
-      const inside = w.text.filter((t) => t.x >= view.x && t.x + t.w <= view.x + view.w + 1 && t.y + t.h > view.y && t.y < view.y + view.h);
-      let area: Rect = view;
-      if (inside.length) {
-        const x0 = Math.max(view.x, Math.min(...inside.map((t) => t.x)) - 16), y0 = Math.max(view.y, Math.min(...inside.map((t) => t.y)) - 16);
-        const x1 = Math.min(view.x + view.w, Math.max(...inside.map((t) => t.x + t.w)) + 16), y1 = Math.min(view.y + view.h, Math.max(...inside.map((t) => t.y + t.h)) + 16);
-        area = { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+    if (view && h.x > view.x && h.x < view.x + view.w && h.y > view.y && h.y < view.y + view.h) {
+      // What's on screen of the note: its paragraphs, headings, code blocks and callouts.
+      const things = [...w.text, ...w.rocks].filter((t) => t.x >= view.x - 1 && t.x + t.w <= view.x + view.w + 1 && t.y >= view.y && t.y + t.h <= view.y + view.h && w.inBounds(t.x + t.w / 2, t.y + t.h / 2, 10));
+      if (things.length) {
+        things.sort((a, b) => a.y - b.y);
+        // Up to five, spread from top to bottom, starting from the nearer end.
+        const n = Math.min(5, things.length), picks: Rect[] = [];
+        for (let k = 0; k < n; k++) picks.push(things[Math.round((k * (things.length - 1)) / Math.max(1, n - 1))]);
+        if (Math.abs(h.y - picks[picks.length - 1].y) < Math.abs(h.y - picks[0].y)) picks.reverse();
+        this.scoutStops = picks.map((t) => ({ x: t.x + t.w * (0.15 + Math.random() * 0.7), y: t.y + t.h / 2 }));
+        this.enterState(STATE.SCOUT);
+        return;
       }
-      this.scoutArea = area;
-      this.enterState(STATE.SCOUT);
-      return;
     }
     this.enterState(STATE.IDLE);
     this.stateData.nextLookTime = 5;
@@ -1566,6 +1588,8 @@ export class Personality {
   /** The page it is standing on scrolled by (dx, dy) art px: everything it had in mind moved too. */
   shifted(dx: number, dy: number) {
     this.destX += dx; this.destY += dy;
+    if (this.sideNap) { this.sideNap.x += dx; this.sideNap.y += dy; }
+    if (this.state === STATE.NAP) { this.stateData.corner += dx; this.stateData.top += dy; if (this.stateData.spot) { this.stateData.spot.x += dx; this.stateData.spot.y += dy; } }
     if (this.route) for (const p of this.route) { p.x += dx; p.y += dy; }
     if (this.routeTo) { this.routeTo.x += dx; this.routeTo.y += dy; }
     if (this.inkAt) { this.inkAt.x += dx; this.inkAt.y += dy; }
@@ -1580,6 +1604,10 @@ export class Personality {
   /** Shortest distance from (x, y) to the head and trunk as drawn (lifted by height). */
   bodyDistance(x: number, y: number) {
     const b = this.body;
+    if (this.sideNap) {
+      const r = napBox(this.sideNap);
+      return Math.hypot(Math.max(r.x - x, 0, x - (r.x + r.w)), Math.max(r.y - y, 0, y - (r.y + r.h)));
+    }
     let best = Infinity;
     for (let i = 0; i < TAIL_FIRST; i += 2) {
       const p = b.project(b.pts[i].x, b.pts[i].y, b.z[i]);
@@ -1651,7 +1679,7 @@ export class Personality {
     if (st === STATE.SLEEP && this.targetBug && !this.userIdle && this.distTo(this.targetBug.x, this.targetBug.y) < 40 * S) { this.forcedNap = false; this.enterState(STATE.HUNT); return; }
     if (st === STATE.SLEEP && p && this.cursorSpeed > this.traits.resolve('startleSpeed') * 0.7 * S && cursorDist < this.traits.resolve('startleDist') * 1.3 * S) { this.scareFrom(p); return; }
     // You've gone quiet: head home and settle in.
-    if (this.userIdle && st !== STATE.SLEEP && st !== STATE.HUNT && st !== STATE.FLEE && st !== STATE.STARTLE) {
+    if (this.userIdle && st !== STATE.SLEEP && st !== STATE.NAP && st !== STATE.HUNT && st !== STATE.FLEE && st !== STATE.STARTLE) {
       this.forcedNap = true;
       if (this.distTo(this.homeX, this.homeY) < 60 * S || st === STATE.BASKING) this.enterState(STATE.SLEEP);
       else if (st !== STATE.EXPLORE) this.enterState(STATE.EXPLORE);
@@ -1714,7 +1742,7 @@ export class Personality {
     for (const p of c.input.presses.splice(0)) {
       const x = p.x / px, y = p.y / px;
       // A click on a panel it is hiding under lands on the panel, not on the gecko.
-      if (this.body.under && c.world.shelterAt(x, y)) continue;
+      if (this.body.under && c.world.coverAt(x, y)) continue;
       for (const bug of c.swarm.bugs) if (dist(bug.x, bug.y, x, y) < 6) bug.startle(x, y);
       if (this.bodyDistance(x, y) < 3) { this.scare(x, y); return; }
     }
@@ -1767,6 +1795,7 @@ export class Personality {
     this.burstTimer++;
     if (this.hideCooldown > 0) this.hideCooldown--;
     if (this.playCooldown > 0) this.playCooldown--;
+    if (this.napCooldown > 0) this.napCooldown--;
     this.typing = c.input.typedWithin(c.now, 3500);
     // A notice goes away by itself after a few seconds; a drag lure is refreshed while it moves.
     if (this.lure && (--this.lureTicks <= 0 || (this.lureThere && !this.lureThere()))) { this.lure = null; this.lureThere = null; }
@@ -1826,10 +1855,9 @@ export class Personality {
     b.tailTwitch = this.state === STATE.HUNT && this.stateData.phase === 'ready' ? 1 : this.state === STATE.PLAY ? 0.8 : this.state === STATE.HELD ? 0.8 : this.state === STATE.LURK && (this.stateData.frozen || this.stateData.phase === 'wary') ? 0.5 : this.state === STATE.NIBBLE && this.stateData.phase === 'grab' && this.stateData.stuck ? 0.6 : this.state === STATE.HUNT ? 0.7 : this.state === STATE.STARTLE ? 0.35 : 0;
     if (this.mouthTicks > 0) { this.mouthTicks--; b.mouthTarget = this.mouthTicks > 4 ? 1 : 0.4; }
     else if (this.state !== STATE.NIBBLE && this.state !== STATE.HUNT && this.state !== STATE.FEAST && this.state !== STATE.PLAY) b.mouthTarget = 0;
-    if (this.gape) { b.mouthTarget = this.gape.mouth; b.lidTarget = Math.max(b.lidTarget, this.gape.lid); }
     if (this.state !== STATE.HUNT && this.state !== STATE.PLAY) b.wiggle = 0;
     if (this.state !== STATE.FEAST) b.gulp = -1;
-    if (this.state !== STATE.IDLE && this.state !== STATE.BASKING) { this.display = null; this.gape = null; b.pushup = 0; }
+    if (this.state !== STATE.IDLE && this.state !== STATE.BASKING) { this.display = null; b.pushup = 0; }
 
     const slow = clamp(1 - this.currentSpeed / (this.speed || 1), 0, 1);
     return {

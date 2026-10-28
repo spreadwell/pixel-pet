@@ -73,7 +73,7 @@ export class World {
   columns: Rect[] = [];
   /** Panels the gecko can hide under. */
   covers: Rect[] = [];
-  /** Code blocks and callouts in the note: stones it can tuck itself under. */
+  /** Code blocks and callouts in the note: flat stones it can nap on. */
   rocks: Rect[] = [];
   /** The open side panels: safe high ground to run to. */
   sidebars: Rect[] = [];
@@ -348,14 +348,6 @@ export class World {
     return null;
   }
 
-  /** Anything it could be hidden under at (x, y): a panel, a code block, a callout. */
-  shelterAt(x: number, y: number): Rect | null {
-    return this.coverAt(x, y) ?? this.rockAt(x, y);
-  }
-
-  /** Everything it can be hidden under. */
-  get shelters() { return this.rocks.length ? [...this.covers, ...this.rocks] : this.covers; }
-
   /**
    * Code blocks and callouts on screen, in reading view and live preview (where a code
    * block is a run of line elements, merged here into one stone).
@@ -374,33 +366,6 @@ export class World {
       out.push({ x: r.left, y: r.top, w: r.width, h: r.height });
     }
     return out.map((r) => this.toArt(r)).filter((r) => r.w >= 16 && r.h >= 6 && !this.coverAt(r.x + r.w / 2, r.y + r.h / 2));
-  }
-
-  /**
-   * The closest way under a code block or callout from (x, y), within `range`: a point
-   * on one of its sides, the inward normal, and how far in it can go. With a threat,
-   * only ways in leading away from it count.
-   */
-  rockEntry(x: number, y: number, range: number, threat?: { x: number; y: number }): CoverEntry | null {
-    let best: CoverEntry | null = null, bd = range;
-    for (const r of this.rocks) {
-      const ex = clamp(x, r.x + 4, r.x + r.w - 4), ey = clamp(y, r.y + 3, r.y + r.h - 3);
-      const sides = [
-        { x: r.x, y: ey, nx: 1, ny: 0, size: r.w },
-        { x: r.x + r.w, y: ey, nx: -1, ny: 0, size: r.w },
-        { x: ex, y: r.y, nx: 0, ny: 1, size: r.h },
-        { x: ex, y: r.y + r.h, nx: 0, ny: -1, size: r.h },
-      ];
-      for (const s of sides) {
-        if (!this.inBounds(s.x - s.nx * 8, s.y - s.ny * 8, 2)) continue;
-        const d = Math.hypot(s.x - x, s.y - y);
-        if (d > bd) continue;
-        if (threat && ((s.x - x) * (x - threat.x) + (s.y - y) * (y - threat.y)) < 0) continue;
-        bd = d;
-        best = { x: s.x, y: s.y, nx: s.nx, ny: s.ny, depth: Math.max(4, Math.min(s.size - 3, 26)) };
-      }
-    }
-    return best;
   }
 
   onText(x: number, y: number, pad = 0) {

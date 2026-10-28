@@ -8,6 +8,7 @@ import { Palette, buildPalette } from './palette';
 import { BrainOptions, Ctx, Personality, Playground, STATE } from './personality';
 import { Reactions } from './reactions';
 import { GeckoRenderer } from './render';
+import { SideNapRenderer } from './sidenap';
 import { Footprints, Happenings, HoverSim } from './surroundings';
 import { World } from './world';
 
@@ -46,6 +47,7 @@ export class PetEngine {
   private particles = new Particles();
   private nibbler: Nibbler;
   private renderer = new GeckoRenderer();
+  private napper = new SideNapRenderer();
   private body!: Body;
   private brain!: Personality;
   private pal!: Palette;
@@ -110,7 +112,7 @@ export class PetEngine {
     else this.body = new Body(b.x - 14, b.y + clamp(rand(0.35, 0.7) * b.h, 20, b.h - 20), 0);
     // Over the terrain, unless it has crept under a panel: under there it is on the note.
     const body = this.body, world = this.world;
-    body.ground = (x, y) => (body.under && world.shelterAt(x, y) ? 0 : world.groundAt(x, y));
+    body.ground = (x, y) => (body.under && world.coverAt(x, y) ? 0 : world.groundAt(x, y));
     this.c = {
       body: this.body, world: this.world, input: this.input, swarm: this.swarm, nibbler: this.nibbler, reactions: this.reactions,
       particles: this.particles, pal: this.pal, opts: this.opts, now: performance.now(), pointer: null, pointerSpeed: 0,
@@ -298,7 +300,7 @@ export class PetEngine {
   private hitsPet(x: number, y: number) {
     if (!this.brain) return false;
     const ax = x / this.opts.px, ay = y / this.opts.px;
-    if (this.body.under && this.world.shelterAt(ax, ay)) return false;
+    if (this.body.under && this.world.coverAt(ax, ay)) return false;
     return this.brain.bodyDistance(ax, ay) < 1.5;
   }
 
@@ -365,7 +367,7 @@ export class PetEngine {
     const drive = this.brain.update();
     this.body.update(TICK, drive);
     // Once it is all the way out from under a panel, it is back on top of things.
-    if (this.body.under && this.brain.state !== STATE.HIDE && !this.body.pts.some((p) => this.world.shelterAt(p.x, p.y))) this.body.under = false;
+    if (this.body.under && this.brain.state !== STATE.HIDE && !this.body.pts.some((p) => this.world.coverAt(p.x, p.y))) this.body.under = false;
 
     this.comeBack();
     if (!this.brain.entering && !this.offPage) {
@@ -400,7 +402,7 @@ export class PetEngine {
     this.prints.draw(g, res, performance.now());
     for (const b of this.swarm.bugs) if (b.z < 1) b.draw(g, pal, this.frame, res);
     // Side panels lie over the note: whatever part of the gecko has crept under one is hidden.
-    const covers = this.body.under ? this.world.shelters : [];
+    const covers = this.body.under ? this.world.covers : [];
     // Scrolled off the edge of the page: only what is still on it shows.
     const page = this.offPage;
     if (page) {
@@ -416,7 +418,10 @@ export class PetEngine {
       for (const c of covers) g.rect(Math.round(c.x * res), Math.round(c.y * res), Math.round(c.w * res), Math.round(c.h * res));
       g.clip('evenodd');
     }
-    this.renderer.draw(g, this.body, pal, res);
+    // Napping on a block it is seen from the side; otherwise from above.
+    const nap = this.brain.sideNap;
+    if (nap) this.napper.draw(g, pal, nap, performance.now(), res);
+    else this.renderer.draw(g, this.body, pal, res);
     if (this.brain.carrying) {
       const s = this.brain.snout(), px = this.opts.px;
       this.reactions.hold((s.x + 0.5) * px, (s.y + 0.5) * px, this.body.headAngle);
