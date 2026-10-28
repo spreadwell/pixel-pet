@@ -92,8 +92,8 @@ const STRIDE_MAX = 8;
 const COMFORT = 0.9;
 /** Curled up asleep: how much each joint of the trunk and of the tail bends (radians). */
 const CURL_TRUNK = 0.14, CURL_TAIL = 0.2;
-/** Draped over a ledge: how much each of the first joints of the tail turns it over. */
-const CURL_DRAPE = 0.19;
+/** Draped over a ledge: how much each joint at the middle of the tail turns its back half over. */
+const CURL_DRAPE = 0.3;
 const MAX_STEP_HZ = 8;
 /** Steepest the body drapes over a step: height change per art px of spine. */
 const DRAPE_SLOPE = 0.8;
@@ -403,7 +403,7 @@ export class Body {
       // Curling up to sleep, every joint behind the neck bends the same way — the trunk a
       // little, the tail more — until the body lies in a C with the head by its tail tip.
       // Draped, the trunk lies straight and only the tail turns, off to the side.
-      if (this.curl > 0) d = lerp(d, this.curlDir * (this.curlStyle === 'coil' ? (i <= HIP ? CURL_TRUNK : CURL_TAIL) : i > HIP && i <= HIP + 8 ? CURL_DRAPE : 0), this.curl);
+      if (this.curl > 0) d = lerp(d, this.curlDir * (this.curlStyle === 'coil' ? (i <= HIP ? CURL_TRUNK : CURL_TAIL) : i > HIP + 8 && i <= HIP + 13 ? CURL_DRAPE : 0), this.curl);
       ang = prevAng + d;
       const len = segH(this.z[i] - this.z[i - 1]);
       p.x = a.x + Math.cos(ang) * len;
@@ -436,7 +436,27 @@ export class Body {
 
     // ── Legs ────────────────────────────────────────────────
     this.placeLegs(false, dt);
+    if (this.curlStyle === 'drape' && this.curl > 0) this.dangleLegs();
     this.lifeSignals(dt);
+  }
+
+  /**
+   * Lying along a ledge: the arm and leg on the ledge side (the side the tail drapes to)
+   * let go and reach straight out over it, limp, to hang down the other side.
+   */
+  private dangleLegs() {
+    for (const leg of this.legs) {
+      const p = this.pts[leg.def.seg], f = this.forward(leg.def.seg);
+      // Out to the ledge side: the animal's left is (f.y, -f.x).
+      const vx = this.curlDir * f.y, vy = -this.curlDir * f.x;
+      if ((leg.hip.x - p.x) * vx + (leg.hip.y - p.y) * vy <= 0) continue;
+      const reach = (leg.def.l1 + leg.def.l2) * 0.95, back = leg.def.front ? 0.5 : -0.8, k = this.curl;
+      const fx = leg.hip.x + vx * reach + f.x * back, fy = leg.hip.y + vy * reach + f.y * back;
+      leg.foot.x = lerp(leg.foot.x, fx, k); leg.foot.y = lerp(leg.foot.y, fy, k);
+      // A limp, slight bend at the elbow or knee.
+      const bend = leg.def.front ? -0.7 : 0.7;
+      leg.knee = { x: lerp(leg.knee.x, (leg.hip.x + fx) / 2 + f.x * bend, k), y: lerp(leg.knee.y, (leg.hip.y + fy) / 2 + f.y * bend, k) };
+    }
   }
 
   /** Dangling from the user's grip: squirming, legs paddling, lifted high. */

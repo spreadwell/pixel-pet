@@ -166,7 +166,7 @@ export class GeckoRenderer {
       const pv = (tilt.pivot + axis * (p.x - axisX)) * res, dy = p.y * res - pv;
       // On top: depth foreshortens and height rises. Past the edge: down the front.
       if (dy <= 0) return { x: px, y: pv + dy * cos - h * res * sin };
-      return { x: px, y: pv + dy * (cos + sin) - h * res * sin * Math.max(0, 1 - dy / (3 * res)) };
+      return { x: px, y: pv + dy - h * res * sin * Math.max(0, 1 - dy / (3 * res)) };
     };
     const shadowRows = cos;
     const flat: Project = (x, y) => ({ x: x * res, y: y * res });
