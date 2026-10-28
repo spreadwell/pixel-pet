@@ -25,6 +25,8 @@ export interface PetOptions extends BrainOptions {
 
 /** The personality is tuned per 60 Hz tick, so the whole simulation runs on a fixed step. */
 const TICK = 1 / 60;
+/** Showing hover effects on what it walks over: switched off for now (see HoverSim). */
+const HOVER = false;
 
 /** Owns the overlay canvas and runs the simulation. Has no Obsidian API dependency. */
 export class PetEngine {
@@ -95,7 +97,7 @@ export class PetEngine {
     this.world.scan();
     this.input.attach();
     this.grabber.attach();
-    this.hover.attach();
+    if (HOVER) this.hover.attach();
     this.happenings.attach();
     this.win.addEventListener('resize', this.onResize);
     this.win.visualViewport?.addEventListener('resize', this.onResize);
@@ -149,7 +151,7 @@ export class PetEngine {
   refreshPalette() {
     this.buildPalettes();
     if (this.c) this.c.pal = this.pal;
-    this.hover.rebuild();
+    if (HOVER) this.hover.rebuild();
   }
 
   /** A different note was opened. */
@@ -314,7 +316,7 @@ export class PetEngine {
     this.react();
     this.reactions.update(TICK);
     // Whatever it is touching shows its hover effect.
-    if (--this.hoverIn <= 0) {
+    if (HOVER && --this.hoverIn <= 0) {
       this.hoverIn = 4;
       const b = this.body, px = this.opts.px;
       if (b.under || b.isHeld || this.opts.reducedMotion) this.hover.clear();

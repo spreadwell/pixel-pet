@@ -54,6 +54,8 @@ export class Bug {
 
   /** Set by the swarm each frame: how close the nearest predator is. */
   threat = Infinity;
+  /** Has flown into the window; from then on it stays inside until it leaves for good. */
+  private inside = false;
 
   update(dt: number, world: World) {
     this.age += dt;
@@ -96,6 +98,8 @@ export class Bug {
     this.z += (targetZ - this.z) * clamp(dt * 4, 0, 1);
 
     if (this.state === 'flying') {
+      if (world.inBounds(this.x, this.y, 4)) this.inside = true;
+      if (this.inside) { const q = world.clampToBounds(this.x, this.y, 3); this.x = q.x; this.y = q.y; }
       if (Math.hypot(this.aim.x - this.x, this.aim.y - this.y) < 12) this.aim = world.clampToBounds(this.x + rand(-120, 120), this.y + rand(-80, 80), 10);
       if (this.x < b.x + 4 || this.x > b.x + b.w - 4) this.heading = Math.PI - this.heading;
       if (this.y < b.y + 4 || this.y > b.y + b.h - 4) this.heading = -this.heading;
