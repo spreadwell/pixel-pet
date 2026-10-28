@@ -5,7 +5,7 @@ import { InputTracker } from './input';
 import { clamp, rand } from './math';
 import { Nibbler } from './nibble';
 import { Palette, buildPalette } from './palette';
-import { BrainOptions, Ctx, Personality, STATE } from './personality';
+import { BrainOptions, Ctx, Personality, Playground, STATE } from './personality';
 import { Reactions } from './reactions';
 import { GeckoRenderer } from './render';
 import { Footprints, Happenings, HoverSim } from './surroundings';
@@ -21,6 +21,8 @@ export interface PetOptions extends BrainOptions {
   /** Frame-rate cap (0 = display rate). */
   maxFps?: number;
   debug?: boolean;
+  /** The nodes of open graph views, in CSS px, for it to play with. */
+  graph?: Playground;
 }
 
 /** The personality is tuned per 60 Hz tick, so the whole simulation runs on a fixed step. */
@@ -108,10 +110,11 @@ export class PetEngine {
     else this.body = new Body(b.x - 14, b.y + clamp(rand(0.35, 0.7) * b.h, 20, b.h - 20), 0);
     // Over the terrain, unless it has crept under a panel: under there it is on the note.
     const body = this.body, world = this.world;
-    body.ground = (x, y) => (body.under && world.coverAt(x, y) ? 0 : world.groundAt(x, y));
+    body.ground = (x, y) => (body.under && world.shelterAt(x, y) ? 0 : world.groundAt(x, y));
     this.c = {
       body: this.body, world: this.world, input: this.input, swarm: this.swarm, nibbler: this.nibbler, reactions: this.reactions,
       particles: this.particles, pal: this.pal, opts: this.opts, now: performance.now(), pointer: null, pointerSpeed: 0,
+      graph: this.playground(),
     };
     this.brain = new Personality(this.c, !at);
     this.last = performance.now();
@@ -154,10 +157,27 @@ export class PetEngine {
     if (HOVER) this.hover.rebuild();
   }
 
-  /** A different note was opened. */
+  /** A different note or tab was opened (both events can fire for one change). */
   noteChanged() {
+    const now = performance.now();
+    if (now - this.lastNoteChange < 300) return;
+    this.lastNoteChange = now;
     this.world.scan();
-    this.brain?.newSurroundings();
+    const el = this.win.document.querySelector('.workspace-leaf.mod-active .view-content');
+    const r = el?.getBoundingClientRect(), px = this.opts.px;
+    this.brain?.newSurroundings(r && r.width > 0 ? { x: r.left / px, y: r.top / px, w: r.width / px, h: r.height / px } : null);
+  }
+  private lastNoteChange = 0;
+
+  /** The graph's nodes as balls, in art px. */
+  private playground(): Playground | null {
+    const g = this.opts.graph, px = this.opts.px;
+    if (!g) return null;
+    return {
+      balls: () => g.balls().map((b) => ({ id: b.id, x: b.x / px, y: b.y / px, r: b.r / px })),
+      push: (id, x, y) => g.push(id, x * px, y * px),
+      letGo: (id) => g.letGo(id),
+    };
   }
 
   /**
@@ -278,7 +298,7 @@ export class PetEngine {
   private hitsPet(x: number, y: number) {
     if (!this.brain) return false;
     const ax = x / this.opts.px, ay = y / this.opts.px;
-    if (this.body.under && this.world.coverAt(ax, ay)) return false;
+    if (this.body.under && this.world.shelterAt(ax, ay)) return false;
     return this.brain.bodyDistance(ax, ay) < 1.5;
   }
 
@@ -345,7 +365,7 @@ export class PetEngine {
     const drive = this.brain.update();
     this.body.update(TICK, drive);
     // Once it is all the way out from under a panel, it is back on top of things.
-    if (this.body.under && this.brain.state !== STATE.HIDE && !this.body.pts.some((p) => this.world.coverAt(p.x, p.y))) this.body.under = false;
+    if (this.body.under && this.brain.state !== STATE.HIDE && !this.body.pts.some((p) => this.world.shelterAt(p.x, p.y))) this.body.under = false;
 
     this.comeBack();
     if (!this.brain.entering && !this.offPage) {
@@ -380,7 +400,7 @@ export class PetEngine {
     this.prints.draw(g, res, performance.now());
     for (const b of this.swarm.bugs) if (b.z < 1) b.draw(g, pal, this.frame, res);
     // Side panels lie over the note: whatever part of the gecko has crept under one is hidden.
-    const covers = this.body.under ? this.world.covers : [];
+    const covers = this.body.under ? this.world.shelters : [];
     // Scrolled off the edge of the page: only what is still on it shows.
     const page = this.offPage;
     if (page) {

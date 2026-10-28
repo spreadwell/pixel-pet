@@ -1,6 +1,7 @@
 import { Editor, MarkdownFileInfo, MarkdownView, Platform, Plugin } from 'obsidian';
 import { PetEngine, PetOptions } from './engine/engine';
 import { rollTraits } from './engine/personality';
+import { GraphBalls } from './graph';
 import { PixelPetSettingTab, DEFAULT_SETTINGS, PetSettings } from './settings';
 
 const WORD = /[\p{L}\p{N}]+/gu;
@@ -12,6 +13,7 @@ export default class PixelPetPlugin extends Plugin {
   private counts = new Map<string, { words: number; tasks: number }>();
   private wordBank = 0;
   private pending = new Map<string, number>();
+  private graph = new GraphBalls(this.app);
 
   async onload() {
     await this.loadSettings();
@@ -24,6 +26,7 @@ export default class PixelPetPlugin extends Plugin {
 
     this.registerEvent(this.app.workspace.on('css-change', () => this.engine?.refreshPalette()));
     this.registerEvent(this.app.workspace.on('file-open', () => this.engine?.noteChanged()));
+    this.registerEvent(this.app.workspace.on('active-leaf-change', () => this.engine?.noteChanged()));
     this.registerEvent(this.app.workspace.on('editor-change', (editor: Editor, info: MarkdownView | MarkdownFileInfo) => this.onEdit(editor, info)));
     this.register(() => { for (const t of this.pending.values()) window.clearTimeout(t); });
 
@@ -60,6 +63,7 @@ export default class PixelPetPlugin extends Plugin {
       nibble: s.nibbleLetters,
       sleepAfterMs: s.sleepAfterMinutes * 60_000,
       reducedMotion: reduced,
+      graph: this.graph,
     };
   }
 

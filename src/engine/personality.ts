@@ -1,7 +1,7 @@
 import { Body, Drive, NEARER, TAIL_FIRST } from './body';
 import type { Bug, Particles, Swarm } from './bugs';
 import type { InputTracker } from './input';
-import { angleDiff, clamp, lerp, rand, smoothstep } from './math';
+import { Rect, angleDiff, clamp, lerp, rand, smoothstep } from './math';
 import type { NibbleTarget, Nibbler } from './nibble';
 import type { Palette } from './palette';
 import type { Reactions } from './reactions';
@@ -74,6 +74,17 @@ export interface Ctx {
   /** Pointer in art px, or null. */
   pointer: { x: number; y: number } | null;
   pointerSpeed: number;
+  /** The nodes of an open graph view, to play with (art px), when there is one. */
+  graph?: Playground | null;
+}
+
+/** A node of the graph view, as a ball to play with (art px). */
+export interface Ball { id: string; x: number; y: number; r: number; }
+export interface Playground {
+  balls(): Ball[];
+  /** Hold ball `id` at (x, y) art px until let go. */
+  push(id: string, x: number, y: number): void;
+  letGo(id: string): void;
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -174,6 +185,9 @@ export const STATE = {
   LURK: 'lurk',
   CURIOUS: 'curious',
   FEAST: 'feast',
+  SCOUT: 'scout',
+  RETREAT: 'retreat',
+  PLAY: 'play',
 } as const;
 export type State = (typeof STATE)[keyof typeof STATE];
 
@@ -240,8 +254,10 @@ const StateHandlers: Record<State, Handler> = {
         nextTongueTime: 40 + Math.random() * 80,
         nextBlinkTime: 30 + Math.random() * 60,
       };
-      // Now and then, a push-up display while it stands there.
-      if (Math.random() < 0.15) g.schedulePushups(10 + Math.random() * 30);
+      // Now and then, a push-up display or a yawn while it stands there.
+      const r = Math.random();
+      if (r < 0.15) g.schedulePushups(10 + Math.random() * 30);
+      else if (r < 0.25 + g.needs.sleepiness * 0.15) g.scheduleYawn(10 + Math.random() * 30);
     },
     update(g) {
       const t = g.stateTimer, d = g.stateData;
@@ -254,6 +270,7 @@ const StateHandlers: Record<State, Handler> = {
         if (g.needs.canSleep()) return { targetSpeed: 0.05 * S, transition: homeDist < 60 * S ? STATE.SLEEP : STATE.EXPLORE };
         if (g.letter) return { targetSpeed: 0.05 * S, transition: STATE.NIBBLE };
         if (g.wantsCover()) return { targetSpeed: 0.05 * S, transition: STATE.HIDE };
+        if (g.wantsToPlay()) return { targetSpeed: 0.05 * S, transition: STATE.PLAY };
         const nearHome = homeDist < 80 * S;
         const r = Math.random();
         if (nearHome && g.needs.fullness > 0.6 && r < g.needs.fullness) return { targetSpeed: 0.05 * S, transition: STATE.BASKING };
@@ -271,7 +288,9 @@ const StateHandlers: Record<State, Handler> = {
       const baseDur = g.traits.resolve('baskDuration');
       const fullBonus = nearHome && g.needs.hunger > 70 ? g.needs.fullness * baseDur * 1.5 : 0;
       g.stateData = { duration: baseDur + Math.random() * baseDur * 1.5 + fullBonus, nextLookTime: 60 + Math.random() * 80, nextBlinkTime: 40 + Math.random() * 50 };
-      if (Math.random() < 0.2) g.schedulePushups(40 + Math.random() * Math.max(0, g.stateData.duration - 120));
+      const r = Math.random(), when = 40 + Math.random() * Math.max(0, g.stateData.duration - 120);
+      if (r < 0.2) g.schedulePushups(when);
+      else if (r < 0.4 + g.needs.sleepiness * 0.2) g.scheduleYawn(when);
     },
     update(g) {
       const t = g.stateTimer, d = g.stateData;
@@ -447,8 +466,9 @@ const StateHandlers: Record<State, Handler> = {
       g.angle = lerpAngle(g.angle, g.targetAngle, 0.5);
     },
     update(g) {
-      // Bolt for the nearest panel leading away from the threat, if there is one.
-      if (HIDING && g.stateTimer === 1 && g.findCover(110, { x: g.threatX, y: g.threatY })) { g.hideFast = true; return { targetSpeed: g.speed, transition: STATE.HIDE }; }
+      // Bolt for the nearest cover leading away from the threat — a code block or callout
+      // to dive under (or a panel, when that's on) — if there is one.
+      if (g.stateTimer === 1 && g.findCover(110, { x: g.threatX, y: g.threatY })) { g.hideFast = true; return { targetSpeed: g.speed, transition: STATE.HIDE }; }
       const mult = g.mildScare || g.c.opts.reducedMotion ? 1.2 : g.traits.resolve('fleeMultiplier');
       const targetSpeed = g.speed * mult;
       g.targetAngle += Math.sin(g.burstTimer * 0.3) * 0.15;
@@ -724,6 +744,174 @@ const StateHandlers: Record<State, Handler> = {
     },
   },
 
+  // A new note: a brisk lap round its edges, stopping at each corner to look about and
+  // taste the air, before settling in.
+  [STATE.SCOUT]: {
+    enter(g) {
+      const a = g.scoutArea!, w = g.c.world, m = 14;
+      const corners = [
+        { x: a.x + m, y: a.y + m }, { x: a.x + a.w - m, y: a.y + m },
+        { x: a.x + a.w - m, y: a.y + a.h - m }, { x: a.x + m, y: a.y + a.h - m },
+      ].map((p) => w.clampToBounds(p.x, p.y, 8));
+      let first = 0;
+      corners.forEach((p, i) => { if (g.distTo(p.x, p.y) < g.distTo(corners[first].x, corners[first].y)) first = i; });
+      // Round the way it is already facing, if it can.
+      const next = corners[(first + 1) % 4], prev = corners[(first + 3) % 4];
+      const dir = Math.abs(angleDiff(g.angle, Math.atan2(next.y - g.head.y, next.x - g.head.x))) < Math.abs(angleDiff(g.angle, Math.atan2(prev.y - g.head.y, prev.x - g.head.x))) ? 1 : 3;
+      g.stateData = { corners: [0, 1, 2, 3].map((k) => corners[(first + k * dir) % 4]), i: 0, pause: 0, leg: 0 };
+      g.flick();
+    },
+    update(g) {
+      const sd = g.stateData, head = g.head;
+      if (sd.pause > 0) {
+        if (--sd.pause <= 0) { sd.pause = 0; sd.i++; sd.leg = 0; }
+        return { targetSpeed: 0 };
+      }
+      if (sd.i >= sd.corners.length) return { targetSpeed: 0, transition: STATE.IDLE };
+      const c = sd.corners[sd.i];
+      if (dist(head.x, head.y, c.x, c.y) < 8 || ++sd.leg > 600) {
+        sd.pause = 25 + Math.random() * 30;
+        g.headLook.look();
+        if (Math.random() < 0.6) g.flick();
+        return { targetSpeed: 0 };
+      }
+      const wp = g.waypoint(c.x, c.y);
+      g.targetAngle = Math.atan2(wp.y - head.y, wp.x - head.x);
+      return { targetSpeed: g.speed * 1.4 };
+    },
+  },
+
+  // The view changed under it while it was by a side panel: up onto the panel, quick,
+  // where it is safe, and wait there watching until things settle.
+  [STATE.RETREAT]: {
+    enter(g) {
+      g.stateData = { spot: g.retreatTo!, out: g.retreatOut!, phase: 'run', wait: 150 + Math.random() * 200 };
+      g.planRoute(g.retreatTo!.x, g.retreatTo!.y);
+      g.flick();
+    },
+    update(g) {
+      const sd = g.stateData, head = g.head;
+      if (sd.phase === 'run') {
+        if (g.arrived(sd) || g.stateTimer > 400) {
+          sd.phase = 'wait'; sd.from = g.stateTimer;
+          // Face back out at the note it came from.
+          g.targetAngle = Math.atan2(sd.out.y - head.y, sd.out.x - head.x);
+          return { targetSpeed: 0 };
+        }
+        const wp = g.waypoint(sd.spot.x, sd.spot.y);
+        g.targetAngle = Math.atan2(wp.y - head.y, wp.x - head.x);
+        return { targetSpeed: g.c.opts.reducedMotion ? g.speed : g.speed * 2.2 };
+      }
+      const t = g.stateTimer - sd.from;
+      if (t % 70 === 30) g.headLook.look();
+      if (t % 90 === 60) g.flick();
+      if (t > sd.wait) return { targetSpeed: 0, transition: STATE.IDLE };
+      return { targetSpeed: Math.abs(angleDiff(g.angle, g.targetAngle)) > 0.4 ? 0.3 * S : 0 };
+    },
+  },
+
+  // The graph view: its nodes are balls. Like a dog with a ball it stalks one, wiggles,
+  // pounces and knocks it flying (the graph pulls it back), sometimes trots off with it
+  // in its mouth and drops it, and goes again, until it tires of the game.
+  [STATE.PLAY]: {
+    enter(g) {
+      const balls = g.c.graph?.balls() ?? [];
+      let best: Ball | null = null;
+      for (const b of balls) if (!best || g.distTo(b.x, b.y) < g.distTo(best.x, best.y)) best = b;
+      g.stateData = { id: best?.id, phase: 'stalk', t: 0, rounds: 3 + Math.floor(Math.random() * 4), carried: false };
+    },
+    update(g) {
+      const sd = g.stateData, pg = g.c.graph, head = g.head, b = g.body;
+      const ball = pg?.balls().find((x) => x.id === sd.id);
+      if (!pg || !ball) return { targetSpeed: 0, transition: STATE.IDLE };
+      const s = g.snout(), gap = dist(s.x, s.y, ball.x, ball.y) - ball.r;
+      const toBall = Math.atan2(ball.y - head.y, ball.x - head.x);
+      sd.t++;
+      switch (sd.phase) {
+        case 'stalk': {
+          if (sd.rounds <= 0) { g.playCooldown = 2400 + Math.random() * 2400; return { targetSpeed: 0, transition: STATE.IDLE }; }
+          if (gap < 14) {
+            if (Math.abs(angleDiff(g.angle, toBall)) < 0.5) { sd.phase = 'ready'; sd.t = 0; sd.readyFor = 25 + Math.random() * 30; return { targetSpeed: 0 }; }
+            // Right by it but facing the wrong way: it can't turn on the spot, so it carries
+            // on past, curving round the ball's side, and comes back at it.
+            const side = Math.sign(angleDiff(g.angle, toBall)) || 1, a = g.angle + side * 0.9;
+            sd.spot = g.c.world.clampToBounds(head.x + Math.cos(a) * 30, head.y + Math.sin(a) * 30, 10);
+            sd.phase = 'back'; sd.t = 0;
+          }
+          const wp = g.waypoint(ball.x, ball.y);
+          g.targetAngle = Math.atan2(wp.y - head.y, wp.x - head.x);
+          if (sd.t > 900) sd.rounds = 0;
+          return { targetSpeed: g.speed * (gap > 50 ? 1.4 : 0.8) };
+        }
+        case 'ready':
+          // The play bow: frozen on it, hips wiggling, tail going.
+          g.targetAngle = toBall;
+          b.wiggle = 1;
+          if (sd.t > sd.readyFor) {
+            b.wiggle = 0;
+            sd.phase = 'pounce'; sd.t = 0;
+            g.currentSpeed = g.c.opts.reducedMotion ? g.speed : g.speed * 3;
+          }
+          return { targetSpeed: 0 };
+        case 'pounce':
+          g.targetAngle = toBall;
+          b.mouthTarget = 0.7;
+          if (gap < 1.5) {
+            sd.rounds--;
+            g.flick();
+            if (!sd.carried && Math.random() < 0.35) {
+              // Got it: off it trots with the ball in its mouth.
+              sd.carried = true;
+              const a = g.angle + (Math.random() - 0.5) * 2;
+              sd.to = g.c.world.clampToBounds(head.x + Math.cos(a) * (40 + Math.random() * 40), head.y + Math.sin(a) * (40 + Math.random() * 40), 20);
+              sd.spot = sd.to;
+              sd.phase = 'carry'; sd.t = 0;
+              g.planRoute(sd.to.x, sd.to.y);
+              return { targetSpeed: g.speed };
+            }
+            // A swipe of the head: the ball goes flying the way it was going.
+            const k = 22 + Math.random() * 20, a = b.headAngle + (Math.random() - 0.5) * 0.6;
+            sd.from = { x: ball.x, y: ball.y };
+            sd.to = { x: ball.x + Math.cos(a) * k, y: ball.y + Math.sin(a) * k };
+            sd.phase = 'kick'; sd.t = 0;
+            return { targetSpeed: g.speed * 0.5 };
+          }
+          if (sd.t > 70) { sd.phase = 'stalk'; sd.t = 0; }
+          return { targetSpeed: g.c.opts.reducedMotion ? g.speed : g.speed * 3 };
+        case 'kick': {
+          const u = smoothstep(Math.min(1, sd.t / 10));
+          pg.push(sd.id, lerp(sd.from.x, sd.to.x, u), lerp(sd.from.y, sd.to.y, u));
+          if (sd.t >= 12) { pg.letGo(sd.id); sd.phase = 'watch'; sd.t = 0; sd.watchFor = 20 + Math.random() * 30; }
+          return { targetSpeed: 0 };
+        }
+        case 'carry': {
+          b.mouthTarget = 0.45;
+          const f = b.headAngle;
+          pg.push(sd.id, s.x + Math.cos(f) * ball.r * 0.6, s.y + Math.sin(f) * ball.r * 0.6);
+          if (g.arrived(sd) || sd.t > 240) {
+            pg.letGo(sd.id);
+            sd.phase = 'watch'; sd.t = 0; sd.watchFor = 40 + Math.random() * 40;
+            g.flick();
+            return { targetSpeed: 0 };
+          }
+          const wp = g.waypoint(sd.to.x, sd.to.y);
+          g.targetAngle = Math.atan2(wp.y - head.y, wp.x - head.x);
+          return { targetSpeed: g.speed * 1.2 };
+        }
+        case 'back': {
+          if (g.arrived(sd) || sd.t > 120) { sd.phase = 'stalk'; sd.t = 0; return { targetSpeed: g.speed * 0.6 }; }
+          g.targetAngle = Math.atan2(sd.spot.y - head.y, sd.spot.x - head.x);
+          return { targetSpeed: g.speed };
+        }
+        default:
+          // Watching where it went, tail going, then after it again.
+          g.headLook.lookAt(angleDiff(g.angle, toBall));
+          if (sd.t > sd.watchFor) { sd.phase = 'stalk'; sd.t = 0; }
+          return { targetSpeed: 0 };
+      }
+    },
+  },
+
   // Picked up by the user. The body dangles and squirms; the mind just waits to be let go.
   [STATE.HELD]: {
     enter(g) { g.stateData = {}; g.currentSpeed = 0; },
@@ -747,7 +935,7 @@ const StateHandlers: Record<State, Handler> = {
       // How far the head is past the panel's edge (negative: still outside).
       const depth = (head.x - e.x) * e.nx + (head.y - e.y) * e.ny;
       const out = Math.atan2(-e.ny, -e.nx);
-      if (sd.phase !== 'approach' && !g.c.world.coverAt(e.x + e.nx * 3, e.y + e.ny * 3)) {
+      if (sd.phase !== 'approach' && !g.c.world.shelterAt(e.x + e.nx * 3, e.y + e.ny * 3)) {
         // The panel went away and left it out in the open.
         g.cover = null;
         g.scare(e.x + e.nx * 20, e.y);
@@ -906,12 +1094,32 @@ export class Personality {
   /** The panel it is heading under or hiding beneath. */
   cover: CoverEntry | null = null;
   hideFast = false;
-  /** A push-up display under way or to come: when it starts (state ticks), how many bobs. */
-  display: { at: number; bobs: number } | null = null;
+  /** A push-up display or a yawn under way or to come: when it starts (state ticks), and for push-ups how many bobs. */
+  display: { kind: 'pushups' | 'yawn'; at: number; bobs: number } | null = null;
+  /** While yawning: how wide the jaws are and how shut the eyes. */
+  gape: { mouth: number; lid: number } | null = null;
+  /** The area of a newly opened note to scout round (art px). */
+  scoutArea: Rect | null = null;
+  /** Where on a side panel to run to, and where it ran from. */
+  retreatTo: { x: number; y: number } | null = null;
+  retreatOut: { x: number; y: number } | null = null;
+  /** Ticks until it will start another game with the graph. */
+  playCooldown = 0;
 
   /** Plan a push-up display `inTicks` from now in this state: two to four bobs. */
   schedulePushups(inTicks: number) {
-    this.display = { at: this.stateTimer + inTicks, bobs: 2 + Math.floor(Math.random() * 3) };
+    this.display = { kind: 'pushups', at: this.stateTimer + inTicks, bobs: 2 + Math.floor(Math.random() * 3) };
+  }
+
+  /** Plan a yawn `inTicks` from now in this state. */
+  scheduleYawn(inTicks: number) {
+    this.display = { kind: 'yawn', at: this.stateTimer + inTicks, bobs: 0 };
+  }
+
+  /** In a graph view with a node close by, and not played lately: fancy a game? */
+  wantsToPlay() {
+    if (this.playCooldown > 0 || !this.c.graph || Math.random() > 0.7) return false;
+    return this.c.graph.balls().some((b) => this.distTo(b.x, b.y) < 220);
   }
 
   /**
@@ -921,7 +1129,9 @@ export class Personality {
    */
   pushups(): boolean {
     const d = this.display, b = this.body;
+    this.gape = null;
     if (!d || this.stateTimer < d.at) { b.pushup = 0; return false; }
+    if (d.kind === 'yawn') return this.yawn(this.stateTimer - d.at);
     const BOB = 32, t = this.stateTimer - d.at;
     if (t >= BOB * d.bobs) {
       this.display = null;
@@ -932,6 +1142,26 @@ export class Personality {
     const u = (t % BOB) / BOB, first = t < BOB ? 1.15 : 1;
     const lift = u < 0.35 ? smoothstep(u / 0.35) : u < 0.55 ? 1 : 1 - smoothstep((u - 0.55) / 0.45);
     b.pushup = 3.4 * first * lift;
+    this.headLook.lookAt(0);
+    return true;
+  }
+
+  /**
+   * A yawn: head tips up, eyes squeeze shut and the jaws gape wide for a long moment,
+   * then close, with a lick to finish. True while it is yawning.
+   */
+  yawn(t: number): boolean {
+    const b = this.body, OPEN = 16, HOLD = 56, END = 74;
+    if (t >= END) {
+      this.display = null;
+      b.pushup = 0;
+      b.flickTongue('lick');
+      this.stateData.duration = Math.max(this.stateData.duration ?? 0, this.stateTimer + 20);
+      return false;
+    }
+    const k = t < OPEN ? smoothstep(t / OPEN) : t < HOLD ? 1 : 1 - smoothstep((t - HOLD) / (END - HOLD));
+    b.pushup = 1.2 * k;
+    this.gape = { mouth: k, lid: k };
     this.headLook.lookAt(0);
     return true;
   }
@@ -990,18 +1220,20 @@ export class Personality {
 
   get body() { return this.c.body; }
   /** The pointer, unless the gecko is under a panel and the pointer is on top of it. */
-  get pointer() { const p = this.c.pointer; return p && !(this.body.under && this.c.world.coverAt(p.x, p.y)) ? p : null; }
+  get pointer() { const p = this.c.pointer; return p && !(this.body.under && this.c.world.shelterAt(p.x, p.y)) ? p : null; }
 
   /** Wary geckos like to get under things. */
   wantsCover() {
-    if (!HIDING || this.hideCooldown > 0) return false;
+    if (this.hideCooldown > 0) return false;
     if (Math.random() > 0.02 + 0.06 * (this.traits.traits.awareness ?? 0.5)) return false;
     this.hideFast = false;
     return this.findCover(150);
   }
 
   findCover(range: number, threat?: { x: number; y: number }) {
-    this.cover = this.c.world.coverEntry(this.head.x, this.head.y, range, threat);
+    // Side panels only while panel hiding is on; code blocks and callouts always.
+    const w = this.c.world;
+    this.cover = (HIDING ? w.coverEntry(this.head.x, this.head.y, range, threat) : null) ?? w.rockEntry(this.head.x, this.head.y, range, threat);
     return !!this.cover;
   }
   get head() { return this.c.body.head; }
@@ -1014,8 +1246,9 @@ export class Personality {
     // Interrupted with a stolen letter in its mouth: it drops it.
     if (this.carrying && state !== STATE.NIBBLE) { this.c.reactions.finish(false); this.carrying = false; }
     this.display = null;
+    if (this.state === STATE.PLAY && this.stateData.id) this.c.graph?.letGo(this.stateData.id);
     // Coming to rest under a panel (after a dash, say) is hiding: it will peek out.
-    if ((state === STATE.IDLE || state === STATE.BASKING) && this.body.under && this.c.world.coverAt(this.head.x, this.head.y) && this.findCover(200)) {
+    if ((state === STATE.IDLE || state === STATE.BASKING) && this.body.under && this.c.world.shelterAt(this.head.x, this.head.y) && this.findCover(200)) {
       state = STATE.HIDE;
       this.hideFast = false;
     }
@@ -1023,7 +1256,7 @@ export class Personality {
     this.stateTimer = 0;
     this.stateData = {};
     StateHandlers[state].enter(this);
-    if (state === STATE.HIDE && this.body.under && this.c.world.coverAt(this.head.x, this.head.y) && this.stateData.phase === 'approach') {
+    if (state === STATE.HIDE && this.body.under && this.c.world.shelterAt(this.head.x, this.head.y) && this.stateData.phase === 'approach') {
       this.stateData.phase = 'under';
       this.stateData.wait = 60 + Math.random() * 120;
     }
@@ -1292,10 +1525,39 @@ export class Personality {
     this.stateData.hurry = true;
   }
 
-  /** A different note is open: everything around it has changed. Have a look round. */
-  newSurroundings() {
+  /**
+   * A different note or tab is open: everything around it has changed. By a side panel it
+   * scurries up onto it for safety; in a graph view it may start a game; on the note it
+   * scouts round the edges; otherwise it has a look round where it is.
+   */
+  newSurroundings(view: Rect | null) {
     this.route = null;
-    if (!this.calm) return;
+    if (!this.calm && this.state !== STATE.SCOUT && this.state !== STATE.PLAY) return;
+    const w = this.c.world, h = this.head;
+    for (const s of w.sidebars) {
+      const dx = Math.max(s.x - h.x, 0, h.x - (s.x + s.w)), dy = Math.max(s.y - h.y, 0, h.y - (s.y + s.h));
+      if (dx === 0 && dy === 0) break;
+      if (Math.hypot(dx, dy) > 45) continue;
+      const left = s.x + s.w / 2 < h.x;
+      this.retreatTo = { x: left ? s.x + s.w - Math.min(28, s.w / 2) : s.x + Math.min(28, s.w / 2), y: clamp(h.y, s.y + 20, s.y + s.h - 20) };
+      this.retreatOut = { x: h.x, y: h.y };
+      this.enterState(STATE.RETREAT);
+      return;
+    }
+    if (this.playCooldown <= 0 && this.c.graph?.balls().some((b) => this.distTo(b.x, b.y) < 260)) { this.enterState(STATE.PLAY); return; }
+    if (view && view.w > 80 && view.h > 60 && h.x > view.x && h.x < view.x + view.w && h.y > view.y && h.y < view.y + view.h) {
+      // Round the note's writing, not the whole (often very wide) pane.
+      const inside = w.text.filter((t) => t.x >= view.x && t.x + t.w <= view.x + view.w + 1 && t.y + t.h > view.y && t.y < view.y + view.h);
+      let area: Rect = view;
+      if (inside.length) {
+        const x0 = Math.max(view.x, Math.min(...inside.map((t) => t.x)) - 16), y0 = Math.max(view.y, Math.min(...inside.map((t) => t.y)) - 16);
+        const x1 = Math.min(view.x + view.w, Math.max(...inside.map((t) => t.x + t.w)) + 16), y1 = Math.min(view.y + view.h, Math.max(...inside.map((t) => t.y + t.h)) + 16);
+        area = { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+      }
+      this.scoutArea = area;
+      this.enterState(STATE.SCOUT);
+      return;
+    }
     this.enterState(STATE.IDLE);
     this.stateData.nextLookTime = 5;
     this.stateData.nextTongueTime = 25;
@@ -1452,7 +1714,7 @@ export class Personality {
     for (const p of c.input.presses.splice(0)) {
       const x = p.x / px, y = p.y / px;
       // A click on a panel it is hiding under lands on the panel, not on the gecko.
-      if (this.body.under && c.world.coverAt(x, y)) continue;
+      if (this.body.under && c.world.shelterAt(x, y)) continue;
       for (const bug of c.swarm.bugs) if (dist(bug.x, bug.y, x, y) < 6) bug.startle(x, y);
       if (this.bodyDistance(x, y) < 3) { this.scare(x, y); return; }
     }
@@ -1504,6 +1766,7 @@ export class Personality {
     this.stateTimer++;
     this.burstTimer++;
     if (this.hideCooldown > 0) this.hideCooldown--;
+    if (this.playCooldown > 0) this.playCooldown--;
     this.typing = c.input.typedWithin(c.now, 3500);
     // A notice goes away by itself after a few seconds; a drag lure is refreshed while it moves.
     if (this.lure && (--this.lureTicks <= 0 || (this.lureThere && !this.lureThere()))) { this.lure = null; this.lureThere = null; }
@@ -1560,12 +1823,13 @@ export class Personality {
     b.lidTarget = sleeping ? (this.sleepPeeking ? 0.25 : 1) : this.petted ? 0.55 : 0;
     b.breathRate = sleeping || this.state === STATE.BASKING || this.petted ? 0.29 : 0.57;
     b.breathDepth = sleeping ? 0.085 : 0.05;
-    b.tailTwitch = this.state === STATE.HUNT && this.stateData.phase === 'ready' ? 1 : this.state === STATE.HELD ? 0.8 : this.state === STATE.LURK && (this.stateData.frozen || this.stateData.phase === 'wary') ? 0.5 : this.state === STATE.NIBBLE && this.stateData.phase === 'grab' && this.stateData.stuck ? 0.6 : this.state === STATE.HUNT ? 0.7 : this.state === STATE.STARTLE ? 0.35 : 0;
+    b.tailTwitch = this.state === STATE.HUNT && this.stateData.phase === 'ready' ? 1 : this.state === STATE.PLAY ? 0.8 : this.state === STATE.HELD ? 0.8 : this.state === STATE.LURK && (this.stateData.frozen || this.stateData.phase === 'wary') ? 0.5 : this.state === STATE.NIBBLE && this.stateData.phase === 'grab' && this.stateData.stuck ? 0.6 : this.state === STATE.HUNT ? 0.7 : this.state === STATE.STARTLE ? 0.35 : 0;
     if (this.mouthTicks > 0) { this.mouthTicks--; b.mouthTarget = this.mouthTicks > 4 ? 1 : 0.4; }
-    else if (this.state !== STATE.NIBBLE && this.state !== STATE.HUNT && this.state !== STATE.FEAST) b.mouthTarget = 0;
-    if (this.state !== STATE.HUNT) b.wiggle = 0;
+    else if (this.state !== STATE.NIBBLE && this.state !== STATE.HUNT && this.state !== STATE.FEAST && this.state !== STATE.PLAY) b.mouthTarget = 0;
+    if (this.gape) { b.mouthTarget = this.gape.mouth; b.lidTarget = Math.max(b.lidTarget, this.gape.lid); }
+    if (this.state !== STATE.HUNT && this.state !== STATE.PLAY) b.wiggle = 0;
     if (this.state !== STATE.FEAST) b.gulp = -1;
-    if (this.state !== STATE.IDLE && this.state !== STATE.BASKING) { this.display = null; b.pushup = 0; }
+    if (this.state !== STATE.IDLE && this.state !== STATE.BASKING) { this.display = null; this.gape = null; b.pushup = 0; }
 
     const slow = clamp(1 - this.currentSpeed / (this.speed || 1), 0, 1);
     return {

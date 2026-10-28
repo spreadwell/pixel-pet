@@ -73,6 +73,10 @@ export class World {
   columns: Rect[] = [];
   /** Panels the gecko can hide under. */
   covers: Rect[] = [];
+  /** Code blocks and callouts in the note: stones it can tuck itself under. */
+  rocks: Rect[] = [];
+  /** The open side panels: safe high ground to run to. */
+  sidebars: Rect[] = [];
   /** Blocks of text on screen (paragraphs, headings, list runs). */
   text: Rect[] = [];
   /** High spots worth climbing up to and sitting on: tabs and headings. */
@@ -158,6 +162,8 @@ export class World {
       });
     }
     this.covers = covers;
+    this.sidebars = covers.filter((r) => r.w >= 30 && r.h >= 60);
+    this.rocks = this.scanRocks();
     const mesas = this.scanText();
     this.buildHeights(mesas);
 
@@ -334,6 +340,67 @@ export class World {
   coverAt(x: number, y: number): Rect | null {
     for (const r of this.covers) if (x > r.x && x < r.x + r.w && y > r.y && y < r.y + r.h) return r;
     return null;
+  }
+
+  /** The code block or callout over (x, y), if any. */
+  rockAt(x: number, y: number): Rect | null {
+    for (const r of this.rocks) if (x > r.x && x < r.x + r.w && y > r.y && y < r.y + r.h) return r;
+    return null;
+  }
+
+  /** Anything it could be hidden under at (x, y): a panel, a code block, a callout. */
+  shelterAt(x: number, y: number): Rect | null {
+    return this.coverAt(x, y) ?? this.rockAt(x, y);
+  }
+
+  /** Everything it can be hidden under. */
+  get shelters() { return this.rocks.length ? [...this.covers, ...this.rocks] : this.covers; }
+
+  /**
+   * Code blocks and callouts on screen, in reading view and live preview (where a code
+   * block is a run of line elements, merged here into one stone).
+   */
+  private scanRocks(): Rect[] {
+    const doc = this.win.document, vh = this.win.innerHeight;
+    const rects: DOMRect[] = [];
+    doc.querySelectorAll<HTMLElement>('.workspace-leaf.mod-active .markdown-rendered pre, .workspace-leaf.mod-active .callout, .workspace-leaf.mod-active .HyperMD-codeblock').forEach((el) => {
+      const r = el.getBoundingClientRect();
+      if (r.width > 0 && r.bottom > 0 && r.top < vh) rects.push(r);
+    });
+    const out: Rect[] = [];
+    for (const r of rects.sort((a, b) => a.top - b.top)) {
+      const prev = out[out.length - 1];
+      if (prev && Math.abs(prev.x - r.left) < 2 && r.top <= prev.y + prev.h + 2) { prev.h = Math.max(prev.h, r.bottom - prev.y); prev.w = Math.max(prev.w, r.width); continue; }
+      out.push({ x: r.left, y: r.top, w: r.width, h: r.height });
+    }
+    return out.map((r) => this.toArt(r)).filter((r) => r.w >= 16 && r.h >= 6 && !this.coverAt(r.x + r.w / 2, r.y + r.h / 2));
+  }
+
+  /**
+   * The closest way under a code block or callout from (x, y), within `range`: a point
+   * on one of its sides, the inward normal, and how far in it can go. With a threat,
+   * only ways in leading away from it count.
+   */
+  rockEntry(x: number, y: number, range: number, threat?: { x: number; y: number }): CoverEntry | null {
+    let best: CoverEntry | null = null, bd = range;
+    for (const r of this.rocks) {
+      const ex = clamp(x, r.x + 4, r.x + r.w - 4), ey = clamp(y, r.y + 3, r.y + r.h - 3);
+      const sides = [
+        { x: r.x, y: ey, nx: 1, ny: 0, size: r.w },
+        { x: r.x + r.w, y: ey, nx: -1, ny: 0, size: r.w },
+        { x: ex, y: r.y, nx: 0, ny: 1, size: r.h },
+        { x: ex, y: r.y + r.h, nx: 0, ny: -1, size: r.h },
+      ];
+      for (const s of sides) {
+        if (!this.inBounds(s.x - s.nx * 8, s.y - s.ny * 8, 2)) continue;
+        const d = Math.hypot(s.x - x, s.y - y);
+        if (d > bd) continue;
+        if (threat && ((s.x - x) * (x - threat.x) + (s.y - y) * (y - threat.y)) < 0) continue;
+        bd = d;
+        best = { x: s.x, y: s.y, nx: s.nx, ny: s.ny, depth: Math.max(4, Math.min(s.size - 3, 26)) };
+      }
+    }
+    return best;
   }
 
   onText(x: number, y: number, pad = 0) {
