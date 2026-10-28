@@ -29,6 +29,17 @@ export class Bug {
     this.timer = kind === 'fly' ? rand(2, 4) : 0.2;
   }
 
+  /** On the page (a cricket, or a fly that has landed): it scrolls with the page. */
+  get onPage() { return this.kind === 'cricket' || this.state === 'landed'; }
+
+  /** The page under it moved by (dx, dy) art px: it, and where it is headed, move too. */
+  shift(dx: number, dy: number) {
+    this.x += dx; this.y += dy;
+    this.aim.x += dx; this.aim.y += dy;
+    const h = this.hop;
+    h.x0 += dx; h.y0 += dy; h.x1 += dx; h.y1 += dy;
+  }
+
   /** Grounded and still: the only time a gecko commits to a strike. */
   get catchable() { return this.alive && this.z < 0.5 && (this.state === 'landed' || this.state === 'resting'); }
 

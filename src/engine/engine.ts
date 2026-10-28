@@ -166,10 +166,12 @@ export class PetEngine {
    */
   private scrolled(box: DOMRect, dx: number, dy: number) {
     const b = this.body, px = this.opts.px;
-    if (!b || b.isHeld || b.under) return;
     const inside = (x: number, y: number) => x * px > box.left && x * px < box.right && y * px > box.top && y * px < box.bottom;
-    if (!inside(b.neck.x, b.neck.y)) return;
     const ax = -dx / px, ay = -dy / px;
+    // Bugs on the page ride along too; flies in the air don't.
+    for (const bug of this.swarm.bugs) if (bug.onPage && inside(bug.x, bug.y)) bug.shift(ax, ay);
+    if (!b || b.isHeld || b.under) return;
+    if (!inside(b.neck.x, b.neck.y)) return;
     b.translate(ax, ay);
     this.brain.shifted(ax, ay);
     this.prints.shift(ax, ay, inside);
