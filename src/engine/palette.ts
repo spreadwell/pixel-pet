@@ -16,6 +16,9 @@ export interface Palette {
   toe: string;
   /** The highlight band along the side toward the light (refined look). */
   light: string;
+  /** The dark line drawn round the whole animal (refined look). */
+  outline: string;
+
   tongue: string;
   shadow: string;
   ink: string;      // theme text colour, for crumbs and bugs
@@ -77,7 +80,8 @@ export function buildPalette(doc: Document, seedExpr: string): Palette {
     eye: hsl(h - 25, 0.35, 0.1),
     glint: 'hsl(0 0% 96%)',
     toe: hsl(h + 30, s * 0.5, Math.min(0.86, l + 0.2)),
-    light: hsl(h + 3, s * 0.92, Math.min(0.82, l + 0.11)),
+    light: hsl(h + 4, s * 0.9, Math.min(0.84, l + 0.17)),
+    outline: hsl(h - 8, Math.min(1, s * 0.9), l * 0.3),
     tongue: 'hsl(350 70% 66%)',
     shadow: dark ? 'rgba(0,0,0,0.42)' : 'rgba(40,30,10,0.16)',
     ink: `rgb(${ink.join(',')})`,
