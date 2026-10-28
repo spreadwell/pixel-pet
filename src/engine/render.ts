@@ -53,6 +53,13 @@ function disc(cx: number, cy: number, r: number, fn: (x: number, y: number, dx: 
   }
 }
 
+/**
+ * How far round the light reaches: a pixel is lit when (its lateral position × how much
+ * that side faces the light) is above minus this. Small, so side-on the body splits in
+ * half, while nearly end-on the shaded side thins away to nothing.
+ */
+const SHADE_EDGE = 0.04;
+
 // Light falls from the upper left of the screen, whichever way the animal faces.
 const LIGHT = { x: -0.6, y: -0.8 };
 
@@ -65,8 +72,11 @@ export class GeckoRenderer {
   private bh = 0;
   private bx = 0;
   private by = 0;
-  /** Which side of the spine (+1 = animal's left) faces the light. Switches with hysteresis. */
-  private lit: 1 | -1 = 1;
+  /**
+   * How much the animal's left side faces the light, -1..1, eased over a few frames so the
+   * wiggle of the gait doesn't flicker it.
+   */
+  private light = 1;
   private bend = new Float32Array(SPINE);
   /**
    * Draw each leg from whole-pixel joints that only move once the real joint has clearly
@@ -81,11 +91,11 @@ export class GeckoRenderer {
   private snappedShadow = new Map<Leg, Snapped>();
 
   draw(ctx: CanvasRenderingContext2D, b: Body, pal: Palette, res = 1) {
-    // The left-hand normal of the body; flip which side is lit only once it clearly
-    // faces away, so the shading never flickers with the gait.
+    // The left-hand normal of the body against the light. As the animal turns, the line
+    // between its lit and shaded halves sweeps across it: the shaded side narrows to its
+    // edge and the light comes round, rather than the two sides swapping at once.
     const toLight = -Math.sin(b.heading) * LIGHT.x + Math.cos(b.heading) * LIGHT.y;
-    if (toLight > 0.25) this.lit = 1;
-    else if (toLight < -0.25) this.lit = -1;
+    this.light += (toLight - this.light) * 0.2;
 
     // Art px in, canvas pixels out.
     const project: Project = (x, y, z) => { const p = b.project(x, y, z); return { x: p.x * res, y: p.y * res }; };
@@ -198,7 +208,7 @@ export class GeckoRenderer {
     for (let y = 0; y < bh; y++) for (let x = 0; x < bw; x++) {
       const k = y * bw + x;
       if (depth[k] <= 0) continue;
-      const lit = (lat[k] >= 0 ? 1 : -1) === this.lit, d = bend[seg[k]];
+      const lit = lat[k] * this.light + SHADE_EDGE > 0, d = bend[seg[k]];
       ctx.fillStyle = lit ? (d > 0.5 ? pal.crest : pal.base) : d < -0.5 ? pal.crease : pal.shade;
       ctx.fillRect(bx + x, by + y, 1, 1);
     }
@@ -271,7 +281,7 @@ export class GeckoRenderer {
     const f = b.forward(leg.def.seg);
     const side = leg.def.side;
     const ox = -f.y * side, oy = f.x * side;
-    const c = side === this.lit ? pal.base : pal.shade;
+    const c = side * this.light + SHADE_EDGE > 0 ? pal.base : pal.shade;
     const seen = new Set<number>();
     // Heights: the hip rides with the body, the foot stands on the terrain (or lifts off it).
     const zh = b.z[leg.def.seg], zf = b.footZ(leg), zk = (zh + zf) / 2;
