@@ -33,6 +33,10 @@ import type { CoverEntry, World } from './world';
 //     click on that panel is above it and unseen.
 //   - New: it finds its way over that terrain (route.ts) instead of beelining: along the
 //     margins and the gaps between paragraphs, around headings, climbing when it pays.
+//   - New: it notices what happens in Obsidian. A modal or the command palette opening
+//     freezes it, watching, until it closes; a notice popping up draws it over to pounce;
+//     something being dragged is prey to chase; a new note gets a look round. When you
+//     stop typing, it comes to sniff along the words you just wrote.
 //
 // Sections: TRAIT SYSTEM · NEEDS · SUB-BEHAVIOURS · STATE HANDLERS · PERSONALITY
 // Distances are multiples of S (the original's body scale, here in art px) and times
@@ -160,6 +164,8 @@ export const STATE = {
   NIBBLE: 'nibble',
   HIDE: 'hide',
   HELD: 'held',
+  WATCH: 'watch',
+  INSPECT: 'inspect',
 } as const;
 export type State = (typeof STATE)[keyof typeof STATE];
 
@@ -306,8 +312,12 @@ const StateHandlers: Record<State, Handler> = {
         else if (burstPhase < 55) targetSpeed = g.speed;
         else targetSpeed = 0.3 * S;
         g.targetAngle += Math.sin(g.burstTimer * 0.08) * 0.15;
+        // Something just popped up: hurry, no dawdling.
+        if (sd.forLure && g.lure) targetSpeed = g.speed * 1.5;
 
         if (d < 15 * S) {
+          // Came over to see what popped up: if it's still there, pounce on it.
+          if (sd.forLure && g.lure) return { targetSpeed, transition: STATE.HUNT };
           if ((g.needs.canSleep() || g.forcedNap) && g.distTo(g.homeX, g.homeY) < 60 * S) return { targetSpeed, transition: STATE.SLEEP };
           sd.investigating = true; sd.investigateTime = 0; sd.lookCount = 0;
           sd.maxLooks = 2 + Math.floor(Math.random() * 3);
@@ -341,16 +351,19 @@ const StateHandlers: Record<State, Handler> = {
   },
 
   [STATE.HUNT]: {
-    enter(g) { g.stateData = { phase: 'stalk', stalkTime: 0, lungeTimer: 0 }; },
+    enter(g) { g.stateData = { phase: 'stalk', stalkTime: 0, lungeTimer: 0, lure: !g.targetBug && !!g.lure }; },
     update(g) {
       const head = g.head;
       const bug = g.targetBug;
       const p = g.pointer;
-      const huntX = bug ? bug.x : p ? p.x : head.x;
-      const huntY = bug ? bug.y : p ? p.y : head.y;
-      const huntDist = dist(head.x, head.y, huntX, huntY);
-      const huntLost = bug ? !g.preyAlive(bug) : !p || huntDist > 120 * S;
       const sd = g.stateData;
+      // Prey is a bug, or a lure (a notice, something dragged), or the pointer.
+      const lure = !bug && sd.lure ? g.lure : null;
+      const target = bug ?? lure ?? p;
+      const huntX = target ? target.x : head.x;
+      const huntY = target ? target.y : head.y;
+      const huntDist = dist(head.x, head.y, huntX, huntY);
+      const huntLost = bug ? !g.preyAlive(bug) : sd.lure ? !g.lure : !p || huntDist > 120 * S;
 
       if (sd.phase === 'stalk') {
         g.targetAngle = Math.atan2(huntY - head.y, huntX - head.x);
@@ -475,6 +488,55 @@ const StateHandlers: Record<State, Handler> = {
         sd.len = stuck ? 70 + Math.random() * 90 : 12;
       }
       return { targetSpeed: 0 };
+    },
+  },
+
+  // Something opened over the workspace (a modal, the command palette): freeze and watch it.
+  [STATE.WATCH]: {
+    enter(g) { g.stateData = { nextBlink: 40 }; g.currentSpeed = 0; },
+    update(g) {
+      const w = g.watching, head = g.head, t = g.stateTimer;
+      if (w) g.headLook.lookAt(angleDiff(g.angle, Math.atan2(w.y - head.y, w.x - head.x)));
+      if (t > g.stateData.nextBlink) { g.blink(); g.stateData.nextBlink = t + 60 + Math.random() * 90; }
+      // It went away (or this has gone on long enough): relax.
+      if (!w || t > 3600) { g.watching = null; g.flick(); return { targetSpeed: 0, transition: STATE.IDLE }; }
+      return { targetSpeed: 0 };
+    },
+  },
+
+  // You stopped typing: come and sniff along the words you just wrote.
+  [STATE.INSPECT]: {
+    enter(g) {
+      g.stateData = { phase: 'go', timer: 0, sniffs: 0 };
+      const k = g.inkAt;
+      if (k) g.planRoute(k.x, k.y);
+    },
+    update(g) {
+      const sd = g.stateData, k = g.inkAt, head = g.head;
+      sd.timer++;
+      // Back to typing: leave it be.
+      if (!k || g.c.input.typedWithin(g.c.now, 300)) return { targetSpeed: 0.05 * S, transition: STATE.IDLE };
+      const tip = g.snout();
+      const d = dist(tip.x, tip.y, k.x, k.y);
+      if (sd.phase === 'go') {
+        const wp = g.waypoint(k.x, k.y);
+        g.targetAngle = d < 12 ? Math.atan2(k.y - tip.y, k.x - tip.x) : Math.atan2(wp.y - head.y, wp.x - head.x);
+        const burstPhase = g.burstTimer % 80;
+        let targetSpeed = burstPhase < 15 ? 0.15 * S : burstPhase < 55 ? g.speed : 0.3 * S;
+        if (d < 12) targetSpeed = Math.min(targetSpeed, 0.15 * S);
+        if (d < 3) { sd.phase = 'sniff'; sd.timer = 0; g.currentSpeed = 0; }
+        if (sd.timer > 1200) return { targetSpeed, transition: STATE.IDLE };
+        return { targetSpeed };
+      }
+      // Work back along the new words, nose down, tasting them as it goes.
+      g.targetAngle = Math.PI;
+      if (sd.timer % 22 === 8) { g.flick(); sd.sniffs++; }
+      g.headLook.lookAt(Math.sin(sd.timer * 0.15) * 0.35);
+      if (sd.sniffs >= 4 + Math.floor(Math.random() * 3) || sd.timer > 260) {
+        g.inkAt = null;
+        return { targetSpeed: 0, transition: STATE.IDLE };
+      }
+      return { targetSpeed: sd.timer % 22 < 10 ? 0 : 0.12 * S };
     },
   },
 
@@ -662,6 +724,15 @@ export class Personality {
   hideFast = false;
   /** Has a stolen letter in its mouth. */
   carrying = false;
+  /** Something to chase that isn't a bug: a notice, a dragged item (art px). */
+  lure: { x: number; y: number } | null = null;
+  private lureTicks = 0;
+  /** For a notice: is it still on screen? */
+  private lureThere: (() => boolean) | null = null;
+  /** What it is watching (a modal's centre). */
+  watching: { x: number; y: number } | null = null;
+  /** The end of what you just wrote, to come and sniff. */
+  inkAt: { x: number; y: number } | null = null;
   /** How often a letter is stuck fast and takes a struggle to pull free. */
   stuckChance = 0.45;
   private route: Waypoint[] | null = null;
@@ -897,6 +968,50 @@ export class Personality {
     this.enterState(STATE.STARTLE);
   }
 
+  /** Is it calm enough to take an interest in something new? */
+  get calm() { const s = this.state; return s === STATE.IDLE || s === STATE.EXPLORE || s === STATE.BASKING; }
+
+  /** A modal opened over the workspace (its centre, art px), or closed (null). */
+  modalChanged(at: { x: number; y: number } | null) {
+    this.watching = at;
+    if (at && (this.calm || this.state === STATE.NIBBLE || this.state === STATE.INSPECT || this.state === STATE.HUNT)) this.enterState(STATE.WATCH);
+  }
+
+  /** A notice popped up just here (art px): hurry over, and pounce if it's still there. */
+  noticed(at: { x: number; y: number }, stillThere: () => boolean) {
+    if (!this.calm || this.distTo(at.x, at.y) > 260) return;
+    this.lure = at;
+    this.lureTicks = 1200;
+    this.lureThere = stillThere;
+    this.summon(at);
+    this.stateData.forLure = true;
+  }
+
+  /** Something is being dragged around here (art px), or was dropped (null): prey. */
+  dragged(at: { x: number; y: number } | null) {
+    this.lure = at;
+    this.lureTicks = at ? 60 : 0;
+    this.lureThere = null;
+    if (at && this.calm && this.distTo(at.x, at.y) < 120) { this.targetBug = null; this.enterState(STATE.HUNT); }
+  }
+
+  /** A different note is open: everything around it has changed. Have a look round. */
+  newSurroundings() {
+    this.route = null;
+    if (!this.calm) return;
+    this.enterState(STATE.IDLE);
+    this.stateData.nextLookTime = 5;
+    this.stateData.nextTongueTime = 25;
+  }
+
+  /** The page it is standing on scrolled by (dx, dy) art px: everything it had in mind moved too. */
+  shifted(dx: number, dy: number) {
+    this.destX += dx; this.destY += dy;
+    if (this.route) for (const p of this.route) { p.x += dx; p.y += dy; }
+    if (this.routeTo) { this.routeTo.x += dx; this.routeTo.y += dy; }
+    if (this.inkAt) { this.inkAt.x += dx; this.inkAt.y += dy; }
+  }
+
   summon(target: { x: number; y: number }) {
     this.enterState(STATE.EXPLORE);
     this.destX = target.x;
@@ -1080,6 +1195,14 @@ export class Personality {
     this.burstTimer++;
     if (this.hideCooldown > 0) this.hideCooldown--;
     this.typing = c.input.typedWithin(c.now, 3500);
+    // A notice goes away by itself after a few seconds; a drag lure is refreshed while it moves.
+    if (this.lure && (--this.lureTicks <= 0 || (this.lureThere && !this.lureThere()))) { this.lure = null; this.lureThere = null; }
+    // You wrote something and stopped: come and have a look.
+    if (this.calm && c.world.lastCaret && c.input.claimFreshInk(c.now)) {
+      const k = c.world.lastCaret;
+      this.inkAt = { x: k.x, y: k.y };
+      this.enterState(STATE.INSPECT);
+    }
     this.userIdle = c.input.idleFor(c.now) > c.opts.sleepAfterMs;
     if (this.entering && c.world.inBounds(this.head.x, this.head.y, 6)) this.entering = false;
     if (!c.world.inBounds(this.homeX, this.homeY, 8)) this.chooseHome();

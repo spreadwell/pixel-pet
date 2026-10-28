@@ -8,6 +8,7 @@ import { Palette, buildPalette } from './palette';
 import { BrainOptions, Ctx, Personality, STATE } from './personality';
 import { Reactions } from './reactions';
 import { GeckoRenderer } from './render';
+import { Footprints, Happenings, HoverSim } from './surroundings';
 import { World } from './world';
 
 export interface PetOptions extends BrainOptions {
@@ -33,6 +34,10 @@ export class PetEngine {
   private input: InputTracker;
   private grabber: Grabber;
   private reactions: Reactions;
+  private prints: Footprints;
+  private hover: HoverSim;
+  private happenings: Happenings;
+  private hoverIn = 0;
   private swarm = new Swarm();
   private particles = new Particles();
   private nibbler: Nibbler;
@@ -67,6 +72,14 @@ export class PetEngine {
       end: () => { this.splash(); this.body.release(); this.brain.putDown(); },
     });
     this.reactions = new Reactions(win);
+    this.prints = new Footprints(win);
+    this.hover = new HoverSim(win);
+    this.happenings = new Happenings(win, {
+      modal: (box) => this.brain?.modalChanged(box ? { x: (box.left + box.width / 2) / this.opts.px, y: (box.top + box.height / 2) / this.opts.px } : null),
+      notice: (box, el) => this.brain?.noticed({ x: (box.left + box.width / 2) / this.opts.px, y: (box.bottom + 18) / this.opts.px }, () => el.isConnected),
+      drag: (at) => this.brain?.dragged(at ? { x: at.x / this.opts.px, y: at.y / this.opts.px } : null),
+      scroll: (box, dx, dy) => this.scrolled(box, dx, dy),
+    });
     this.nibbler = new Nibbler(win);
     this.buildPalettes();
   }
@@ -82,6 +95,8 @@ export class PetEngine {
     this.world.scan();
     this.input.attach();
     this.grabber.attach();
+    this.hover.attach();
+    this.happenings.attach();
     this.win.addEventListener('resize', this.onResize);
     this.win.visualViewport?.addEventListener('resize', this.onResize);
     doc.addEventListener('visibilitychange', this.onVisibility);
@@ -105,6 +120,8 @@ export class PetEngine {
     this.win.cancelAnimationFrame(this.raf);
     this.input.detach();
     this.grabber.detach();
+    this.hover.destroy();
+    this.happenings.detach();
     this.win.removeEventListener('resize', this.onResize);
     this.win.visualViewport?.removeEventListener('resize', this.onResize);
     this.win.document.removeEventListener('visibilitychange', this.onVisibility);
@@ -128,9 +145,40 @@ export class PetEngine {
     if (o.nibble === false) { this.nibbler.clear(); this.brain?.dropLetter(); }
   }
 
+  /** The theme or styles changed: new colours, and new hover styles to copy. */
   refreshPalette() {
     this.buildPalettes();
     if (this.c) this.c.pal = this.pal;
+    this.hover.rebuild();
+  }
+
+  /** A different note was opened. */
+  noteChanged() {
+    this.world.scan();
+    this.brain?.newSurroundings();
+  }
+
+  /**
+   * Something scrolled. If the gecko is on it — the note, the file list — it rides along
+   * with the page, as do its footprints; pushed right to the edge, it scrambles.
+   */
+  private scrolled(box: DOMRect, dx: number, dy: number) {
+    const b = this.body, px = this.opts.px;
+    if (!b || b.isHeld || b.under) return;
+    const inside = (x: number, y: number) => x * px > box.left && x * px < box.right && y * px > box.top && y * px < box.bottom;
+    if (!inside(b.neck.x, b.neck.y)) return;
+    const ax = -dx / px, ay = -dy / px;
+    b.translate(ax, ay);
+    this.brain.shifted(ax, ay);
+    this.prints.shift(ax, ay, inside);
+    // The layout under it moved: look again soon.
+    this.scanIn = Math.min(this.scanIn, 0.08);
+    const n = b.neck, m = 6;
+    const cx = Math.min(Math.max(n.x, box.left / px + m), box.right / px - m), cy = Math.min(Math.max(n.y, box.top / px + m), box.bottom / px - m);
+    if (cx !== n.x || cy !== n.y) {
+      b.translate(cx - n.x, cy - n.y);
+      this.brain.scare(n.x - ax, n.y - ay, true);
+    }
   }
 
   private buildPalettes() {
@@ -163,8 +211,13 @@ export class PetEngine {
       const climbing = this.world.groundAt(f.x, f.y) > b.z[f.leg.def.seg] + 1.5;
       const strength = climbing ? 1.5 : b.speed > 50 ? 1.3 : 1;
       // The letter under the foot as it is drawn (lifted with the surface it stands on).
-      const q = b.project(f.x, f.y, this.world.groundAt(f.x, f.y));
+      const z = this.world.groundAt(f.x, f.y);
+      const q = b.project(f.x, f.y, z);
       this.reactions.step(q.x * px, q.y * px, Math.cos(b.heading), Math.sin(b.heading), strength);
+      // Stepping in the text inks the foot; off it, an inked foot leaves a print.
+      const ink = z === 4 || z === 5 ? this.prints.textColourAt(q.x * px, q.y * px) : null;
+      if (ink) this.prints.dip(f.leg, ink);
+      else if (z < 4) this.prints.step(f.leg, q.x, q.y, f.leg.toe, performance.now());
     }
     b.footfalls.length = 0;
   }
@@ -215,7 +268,7 @@ export class PetEngine {
 
     // A sleeping gecko with nothing around only needs a few frames a second, and on
     // battery-powered devices the frame rate is capped.
-    const quiet = this.brain.state === STATE.SLEEP && !this.swarm.bugs.length && !this.particles.active;
+    const quiet = this.brain.state === STATE.SLEEP && !this.swarm.bugs.length && !this.particles.active && !this.prints.active;
     const minFrame = quiet ? 1 / 12 : this.opts.maxFps ? 1 / this.opts.maxFps : 0;
     this.frameAcc += dt;
     if (this.frameAcc < minFrame - 0.002) return;
@@ -260,6 +313,17 @@ export class PetEngine {
     this.particles.update(TICK);
     this.react();
     this.reactions.update(TICK);
+    // Whatever it is touching shows its hover effect.
+    if (--this.hoverIn <= 0) {
+      this.hoverIn = 4;
+      const b = this.body, px = this.opts.px;
+      if (b.under || b.isHeld || this.opts.reducedMotion) this.hover.clear();
+      else {
+        const pts = [b.pts[2], b.pts[10], b.pts[17]].map((p, i) => b.project(p.x, p.y, b.z[[2, 10, 17][i]]));
+        for (const l of b.legs) pts.push(b.project(l.foot.x, l.foot.y, b.footZ(l)));
+        this.hover.touch(pts.map((p) => ({ x: p.x * px, y: p.y * px })));
+      }
+    }
   }
 
   private render() {
@@ -268,6 +332,7 @@ export class PetEngine {
     g.clearRect(0, 0, this.canvas.width, this.canvas.height);
     const pal = this.pal;
     const res = this.res;
+    this.prints.draw(g, res, performance.now());
     for (const b of this.swarm.bugs) if (b.z < 1) b.draw(g, pal, this.frame, res);
     // Side panels lie over the note: whatever part of the gecko has crept under one is hidden.
     const covers = this.body.under ? this.world.covers : [];

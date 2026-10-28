@@ -24,6 +24,8 @@ export class InputTracker {
   presses: Press[] = [];
   /** True once any touch input has been seen. */
   touch = false;
+  /** Characters typed since the gecko last came to look. */
+  private typedSince = 0;
 
   private lastT = 0;
   private fingerDown = false;
@@ -73,10 +75,11 @@ export class InputTracker {
     };
     on('pointerup', (e) => lift(e, false));
     on('pointercancel', (e) => lift(e, true));
-    on('keydown', () => {
+    on('keydown', (e) => {
       const now = performance.now();
       this.lastKey = now;
       this.lastActivity = now;
+      if (e.key.length === 1) this.typedSince++;
     });
     on('wheel', () => { this.lastActivity = performance.now(); });
     on('scroll', () => { this.lastActivity = performance.now(); });
@@ -125,5 +128,16 @@ export class InputTracker {
   }
 
   typedWithin(now: number, ms: number) { return now - this.lastKey < ms; }
+
+  /**
+   * True once, after a sentence or so has been typed and then a pause: the moment for the
+   * gecko to come and look at it.
+   */
+  claimFreshInk(now: number) {
+    const pause = now - this.lastKey;
+    if (this.typedSince < 12 || pause < 1500) return false;
+    this.typedSince = 0;
+    return pause < 8000;
+  }
   idleFor(now: number) { return now - this.lastActivity; }
 }

@@ -23,6 +23,7 @@ export default class PixelPetPlugin extends Plugin {
     this.addCommand({ id: 'release-bug', name: 'Release a bug', callback: () => this.engine?.spawnBug(Math.random() < 0.6 ? 'fly' : 'cricket') });
 
     this.registerEvent(this.app.workspace.on('css-change', () => this.engine?.refreshPalette()));
+    this.registerEvent(this.app.workspace.on('file-open', () => this.engine?.noteChanged()));
     this.registerEvent(this.app.workspace.on('editor-change', (editor: Editor, info: MarkdownView | MarkdownFileInfo) => this.onEdit(editor, info)));
     this.register(() => { for (const t of this.pending.values()) window.clearTimeout(t); });
 

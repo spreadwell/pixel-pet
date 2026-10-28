@@ -83,6 +83,8 @@ export class World {
   private hh = 0;
   edges: Edge[] = [];
   caret: { x: number; y: number } | null = null;
+  /** Where the caret was last seen, even after the editor lost focus. */
+  lastCaret: { x: number; y: number } | null = null;
   /** Regions where the layout changed since the last scan (art px). */
   shifts: Rect[] = [];
 
@@ -179,6 +181,7 @@ export class World {
       }
     }
     this.caret = r && r.height > 0 ? { x: (r.left + 1) / this.px, y: (r.top + r.height / 2) / this.px } : null;
+    if (this.caret) this.lastCaret = { ...this.caret };
   }
 
   private detectShifts(sig: Map<string, Rect>) {
