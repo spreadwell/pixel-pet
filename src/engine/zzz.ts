@@ -3,8 +3,8 @@ import type { Palette } from './palette';
 /** The Z's of a sleeping gecko, rising from its head, growing and fading. */
 
 const Z_EVERY = 1.6, Z_LIFE = 2.8;
-const Z_SMALL = ['####', '..#.', '.#..', '####'];
-const Z_BIG = ['#####', '...#.', '..#..', '.#...', '#####'];
+const Z_SMALL = ['###', '.#.', '###'];
+const Z_BIG = ['####', '..#.', '.#..', '####'];
 
 export class Zzz {
   private zs: { born: number; x: number; y: number }[] = [];
