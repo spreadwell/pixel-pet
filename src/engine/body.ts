@@ -191,6 +191,10 @@ export class Body {
   curlDir: 1 | -1 = 1;
 
   tailTwitch = 0;        // amplitude target 0..1
+  /** Winding up to pounce: the hips and tail base wiggle side to side, 0..1. */
+  wiggle = 0;
+  /** Where along the spine a swallowed mouthful is, or -1. */
+  gulp = -1;
   private twitch = 0;
   private flexAmp = 0;
   /** Path-following spine (without flexion); `pts` is what is drawn. */
@@ -400,6 +404,8 @@ export class Body {
       const fx = a.x - c.x, fy = a.y - c.y, fl = Math.hypot(fx, fy) || 1;
       let off = s * flexShape(i);
       if (i > HIP) off += Math.sin(this.gaitPhase * TAU - (i - HIP) * 0.4) * this.flexAmp * 0.8 * Math.min(1, (i - HIP) / 4);
+      // Winding up to pounce: a quick side-to-side wiggle of the hips and tail base.
+      if (this.wiggle > 0.01 && i > HIP - 4 && i < HIP + 9) off += Math.sin(this.time * 30) * this.wiggle * 0.7 * (1 - Math.abs(i - HIP - 2) / 7);
       // At rest the tail lies in a loose curve to one side.
       if (i > HIP) off += this.curlDir * this.curl * 0.018 * (i - HIP) * (i - HIP);
       this.pts[i].x = p.x + (fy / fl) * off;
@@ -638,8 +644,10 @@ export class Body {
   }
 
   breathScale(i: number): number {
-    if (i < TORSO_FIRST || i > TORSO_LAST) return 1;
-    return 1 + Math.sin(this.breath) * this.breathDepth;
+    // A swallowed mouthful shows as a lump passing down the throat.
+    const lump = this.gulp < 0 ? 0 : 0.45 * Math.exp(-((i - this.gulp) ** 2) / 3);
+    if (i < TORSO_FIRST || i > TORSO_LAST) return 1 + lump;
+    return 1 + Math.sin(this.breath) * this.breathDepth + lump;
   }
 
   /** Translate the whole animal (used when the art scale changes). */

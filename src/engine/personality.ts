@@ -173,6 +173,7 @@ export const STATE = {
   INSPECT: 'inspect',
   LURK: 'lurk',
   CURIOUS: 'curious',
+  FEAST: 'feast',
 } as const;
 export type State = (typeof STATE)[keyof typeof STATE];
 
@@ -389,17 +390,38 @@ const StateHandlers: Record<State, Handler> = {
         // A flying insect is watched, not struck.
         const strikeable = !bug || bug.catchable;
         if (!strikeable && huntDist < 50 * S) targetSpeed = 0;
-        if (strikeable && (huntDist < 40 * S || sd.stalkTime > 120)) { sd.phase = 'lunge'; sd.lungeTimer = 0; }
+        if (strikeable && (huntDist < 40 * S || sd.stalkTime > 120)) { sd.phase = bug ? 'ready' : 'lunge'; sd.lungeTimer = 0; sd.readyFor = 18 + Math.random() * 24; }
         if (huntLost) return { targetSpeed, transition: STATE.IDLE };
         return { targetSpeed };
       }
 
       g.targetAngle = Math.atan2(huntY - head.y, huntX - head.x);
-      const approachSpeed = huntDist < 30 * S ? g.speed * 0.8 : g.speed * 2;
       sd.lungeTimer++;
-      if (huntDist < 12 * S) { g.body.mouthTarget = 1; if (!g.body.tongue) g.flick(); }
-      if (sd.lungeTimer > 60 || huntDist < 8 * S || huntLost) return { targetSpeed: approachSpeed, transition: STATE.IDLE };
-      return { targetSpeed: g.c.opts.reducedMotion ? Math.min(approachSpeed, g.speed) : approachSpeed };
+      if (sd.phase === 'ready') {
+        // The wind-up: frozen, head locked on, tail lashing, hips wiggling — then go.
+        g.body.wiggle = 1;
+        if (huntLost) { g.body.wiggle = 0; return { targetSpeed: 0, transition: STATE.IDLE }; }
+        if (huntDist > 30) { g.body.wiggle = 0; sd.phase = 'stalk'; return { targetSpeed: 0 }; }
+        if (sd.lungeTimer > sd.readyFor) {
+          g.body.wiggle = 0;
+          sd.phase = 'lunge'; sd.lungeTimer = 0;
+          // Explosive: no easing in.
+          g.currentSpeed = g.c.opts.reducedMotion ? g.speed : g.speed * 3.5;
+          g.body.mouthTarget = 1;
+        }
+        return { targetSpeed: 0 };
+      }
+      // The strike: a burst straight at it, jaws gaping.
+      g.body.mouthTarget = 1;
+      const strike = g.c.opts.reducedMotion ? g.speed : bug ? g.speed * 3.5 : huntDist < 30 * S ? g.speed * 0.8 : g.speed * 2;
+      if (huntLost || sd.lungeTimer > (bug ? 30 : 60)) {
+        // Missed: it skids to a stop and looks about, as if it meant to.
+        g.body.mouthTarget = 0;
+        g.flick();
+        g.headLook.look();
+        return { targetSpeed: 0, transition: STATE.IDLE };
+      }
+      return { targetSpeed: strike };
     },
   },
 
@@ -657,6 +679,46 @@ const StateHandlers: Record<State, Handler> = {
     },
   },
 
+  // Caught it. Snap the jaws shut, shake it, chew, gulp it down (a lump passes down the
+  // throat), then a lick and a contented blink.
+  [STATE.FEAST]: {
+    enter(g) {
+      g.stateData = { t: 0 };
+      g.currentSpeed = 0;
+      g.body.wiggle = 0;
+      g.body.mouth = 1;
+      g.body.mouthTarget = 0;
+      g.headLook.lookAt(Math.random() < 0.5 ? -0.4 : 0.4);
+    },
+    update(g) {
+      const sd = g.stateData, b = g.body, t = ++sd.t, big = g.preyKind === 'cricket';
+      const SHAKE = 8, CHEW = SHAKE + 26, GULP = CHEW + (big ? 70 : 45), DONE = GULP + 36;
+      if (t < SHAKE) return { targetSpeed: 0 };
+      if (t < CHEW) {
+        // A quick kill-shake, side to side.
+        g.headLook.lookAt(Math.sin((t - SHAKE) * 1.1) * 0.6);
+        return { targetSpeed: 0 };
+      }
+      if (t < GULP) {
+        // Chewing, jaws working, bits dropping.
+        b.mouthTarget = Math.floor((t - CHEW) / 6) % 2 === 0 ? 0.55 : 0;
+        g.headLook.lookAt(Math.sin((t - CHEW) * 0.35) * 0.15);
+        if ((t - CHEW) % 16 === 8) { const s = g.snout(); g.c.particles.burst(s.x, s.y, g.c.pal.ink, 1, 5); }
+        return { targetSpeed: 0 };
+      }
+      if (t < DONE) {
+        // Gulp: the mouthful goes down.
+        b.mouthTarget = 0;
+        b.gulp = 2 + ((t - GULP) / (DONE - GULP)) * 11;
+        return { targetSpeed: 0 };
+      }
+      b.gulp = -1;
+      b.flickTongue('lick');
+      g.blink();
+      return { targetSpeed: 0, transition: g.needs.fullness > 0.6 ? STATE.BASKING : STATE.IDLE };
+    },
+  },
+
   // Picked up by the user. The body dangles and squirms; the mind just waits to be let go.
   [STATE.HELD]: {
     enter(g) { g.stateData = {}; g.currentSpeed = 0; },
@@ -841,6 +903,8 @@ export class Personality {
   hideFast = false;
   /** Has a stolen letter in its mouth. */
   carrying = false;
+  /** What it last caught. */
+  preyKind: 'fly' | 'cricket' = 'fly';
   /** Something to chase that isn't a bug: a notice, a dragged item (art px). */
   lure: { x: number; y: number } | null = null;
   private lureTicks = 0;
@@ -1315,12 +1379,12 @@ export class Personality {
       if (!this.preyAlive(bug)) continue;
       const bd = dist(head.x, head.y, bug.x, bug.y);
       if (bd < nearest) { nearest = bd; this.targetBug = bug; }
-      if (bd < 10 * S && bug.catchable) {
+      if (bd < 10 * S && bug.catchable && this.state !== STATE.FEAST) {
         bug.alive = false;
         this.needs.feed(bug.kind === 'cricket' ? 40 : 15);
-        this.flick();
-        this.mouthTicks = 10;
-        this.c.particles.burst(bug.x, bug.y, this.c.pal.wing, 2, 8);
+        this.c.particles.burst(bug.x, bug.y, this.c.pal.wing, bug.kind === 'cricket' ? 5 : 4, 14);
+        this.preyKind = bug.kind;
+        this.enterState(STATE.FEAST);
       }
       // Prey that sees the lizard coming may bolt; a stalking lizard is far harder to spot.
       const facing = Math.abs(angleDiff(this.angle, Math.atan2(bug.y - head.y, bug.x - head.x))) < 0.8;
@@ -1328,7 +1392,7 @@ export class Personality {
       if (facing && bd < (stalking ? 20 : 80) * S && Math.random() < (stalking ? 0.08 : 0.02)) bug.startle(head.x, head.y);
     }
     if (keep && this.preyAlive(keep) && !this.targetBug) this.targetBug = keep;
-    if (this.targetBug && this.state !== STATE.STARTLE && this.state !== STATE.FLEE && this.state !== STATE.HUNT && this.state !== STATE.SLEEP && this.state !== STATE.NIBBLE) {
+    if (this.targetBug && this.state !== STATE.STARTLE && this.state !== STATE.FLEE && this.state !== STATE.HUNT && this.state !== STATE.SLEEP && this.state !== STATE.NIBBLE && this.state !== STATE.FEAST) {
       if (Math.random() < this.needs.huntEagerness * 0.1) this.enterState(STATE.HUNT);
     }
   }
@@ -1450,7 +1514,7 @@ export class Personality {
     let targetSpeed = result.targetSpeed;
     if (this.state !== STATE.FLEE && this.state !== STATE.STARTLE) targetSpeed *= this.needs.fullnessSlowdown;
     if (this.petted) targetSpeed = 0;
-    const turnRate = this.state === STATE.HUNT ? (this.stateData.phase === 'lunge' ? 0.15 : 0.08) : this.state === STATE.SLEEP ? 0.02 : 0.06;
+    const turnRate = this.state === STATE.HUNT ? (this.stateData.phase === 'lunge' ? 0.3 : 0.08) : this.state === STATE.SLEEP ? 0.02 : 0.06;
     this.angle += angleDiff(this.angle, this.targetAngle) * turnRate;
     this.currentSpeed = lerp(this.currentSpeed, targetSpeed, 0.05);
 
@@ -1460,9 +1524,11 @@ export class Personality {
     b.lidTarget = sleeping ? (this.sleepPeeking ? 0.25 : 1) : this.petted ? 0.55 : 0;
     b.breathRate = sleeping || this.state === STATE.BASKING || this.petted ? 0.29 : 0.57;
     b.breathDepth = sleeping ? 0.085 : 0.05;
-    b.tailTwitch = this.state === STATE.HELD ? 0.8 : this.state === STATE.LURK && (this.stateData.frozen || this.stateData.phase === 'wary') ? 0.5 : this.state === STATE.NIBBLE && this.stateData.phase === 'grab' && this.stateData.stuck ? 0.6 : this.state === STATE.HUNT ? 0.7 : this.state === STATE.STARTLE ? 0.35 : 0;
+    b.tailTwitch = this.state === STATE.HUNT && this.stateData.phase === 'ready' ? 1 : this.state === STATE.HELD ? 0.8 : this.state === STATE.LURK && (this.stateData.frozen || this.stateData.phase === 'wary') ? 0.5 : this.state === STATE.NIBBLE && this.stateData.phase === 'grab' && this.stateData.stuck ? 0.6 : this.state === STATE.HUNT ? 0.7 : this.state === STATE.STARTLE ? 0.35 : 0;
     if (this.mouthTicks > 0) { this.mouthTicks--; b.mouthTarget = this.mouthTicks > 4 ? 1 : 0.4; }
-    else if (this.state !== STATE.NIBBLE && this.state !== STATE.HUNT) b.mouthTarget = 0;
+    else if (this.state !== STATE.NIBBLE && this.state !== STATE.HUNT && this.state !== STATE.FEAST) b.mouthTarget = 0;
+    if (this.state !== STATE.HUNT) b.wiggle = 0;
+    if (this.state !== STATE.FEAST) b.gulp = -1;
 
     const slow = clamp(1 - this.currentSpeed / (this.speed || 1), 0, 1);
     return {
