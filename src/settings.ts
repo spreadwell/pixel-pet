@@ -90,6 +90,8 @@ const PAGES: { id: Section; name: string; desc: string; icon: string }[] = [
 ];
 
 const REPO = 'https://github.com/spreadwell/pixel-pet';
+/** Where to find the developer's other plugins. */
+const MORE = 'https://community.obsidian.md/users/giblicious';
 
 interface PageCompat { title: string; containerEl: HTMLElement; display(): void; hide(): void; }
 
@@ -132,6 +134,9 @@ export class PixelPetSettingTab extends PluginSettingTab {
           return page as unknown as obsidian.SettingPage;
         },
       })),
+    }, {
+      type: 'group',
+      items: [{ name: 'More plugins', searchable: false, render: (setting: Setting) => moreBanner(setting) }],
     }];
   }
 
@@ -174,6 +179,7 @@ export class PixelPetSettingTab extends PluginSettingTab {
         row.settingEl.addEventListener('click', go);
         row.settingEl.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); } });
       }
+      moreBanner(new Setting(group(el)));
       return;
     }
     const header = el.createDiv({ cls: 'pixel-pet-page-header' });
@@ -326,6 +332,17 @@ export class PixelPetSettingTab extends PluginSettingTab {
     link('Read about it', 'Everything it does, on GitHub.', `${REPO}#readme`);
     new Setting(help).setName('Version').setDesc(this.plugin.manifest.version);
   }
+}
+
+/** A small banner pointing to the developer's other plugins. */
+function moreBanner(setting: Setting) {
+  setting.settingEl.addClass('pixel-pet-more');
+  setting.nameEl.empty();
+  const icon = setting.nameEl.createSpan({ cls: 'pixel-pet-page-icon' });
+  setIcon(icon, 'puzzle');
+  setting.nameEl.createSpan({ text: 'More plugins by Spreadwell' });
+  setting.setDesc('Other plugins from the maker of Pixel Pet.');
+  setting.addButton((b) => b.setButtonText('Take a look').onClick(() => window.open(MORE)));
 }
 
 /** A titled group of settings, in Obsidian's own grouped style: returns where its rows go. */
