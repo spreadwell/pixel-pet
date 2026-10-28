@@ -9,6 +9,8 @@ export interface Palette {
   crest: string;
   /** Where it dips into a crease, in shade. */
   crease: string;
+  /** The pale throat and belly, seen when it's side-on. */
+  belly: string;
   eye: string;
   /** A catch-light in the eye. */
   glint: string;
@@ -45,6 +47,8 @@ function rgbToHsl([r, g, b]: Rgb): [number, number, number] {
   return [h * 60, s, l];
 }
 
+/** The shortest way round the colour wheel from hue a to hue b, degrees. */
+const angleTo = (a: number, b: number) => ((((b - a) % 360) + 540) % 360) - 180;
 const hsl = (h: number, s: number, l: number) =>
   `hsl(${((h % 360) + 360) % 360} ${Math.round(clamp(s, 0, 1) * 100)}% ${Math.round(clamp(l, 0, 1) * 100)}%)`;
 
@@ -70,6 +74,7 @@ export function buildPalette(doc: Document, seedExpr: string): Palette {
     shade: hsl(h - 4, Math.min(1, s * 1.05), l * 0.68),
     crest: hsl(h + 2, s * 0.97, Math.min(0.8, l + 0.05)),
     crease: hsl(h - 5, Math.min(1, s * 1.05), l * 0.61),
+    belly: hsl(h + angleTo(h, 50) * 0.7, 0.55, dark ? 0.8 : 0.86),
     eye: hsl(h - 25, 0.35, 0.1),
     glint: 'hsl(0 0% 96%)',
     tongue: 'hsl(350 70% 66%)',
