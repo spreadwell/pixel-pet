@@ -315,7 +315,8 @@ export class GeckoRenderer {
       const { x: cx, y: cy } = project(sp.x, sp.y, z, mid, i > HIP);
       // Side-on the tail tapers right down to a fine tip.
       const taper = i > HIP ? 1 - TAIL_TAPER * this.tiltA * ((i - HIP) / (SPINE - 1 - HIP)) : 1;
-      const r = ra * taper * (1 + NEARER * Math.max(0, z)) * res;
+      // (Never so thin that its slices stop joining up into one line.)
+      const r = Math.max(ra * taper * (1 + NEARER * Math.max(0, z)), i > HIP && this.tiltA > 0 ? 0.6 : 0) * res;
       // Tipped over, each round section is seen more from the side, so less tall.
       const ry = r * Math.sqrt(this.tiltCos ** 2 + (fl * this.tiltSin) ** 2);
       ellipse(cx, cy, r, ry, (x, y, dx, dy, d2) => {

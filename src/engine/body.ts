@@ -452,11 +452,12 @@ export class Body {
       if ((leg.hip.x - p.x) * vx + (leg.hip.y - p.y) * vy <= 0) continue;
       const k = leg.def.front ? this.dangle.front : this.dangle.hind;
       if (k <= 0) continue;
-      const reach = (leg.def.l1 + leg.def.l2) * 0.7, back = leg.def.front ? 0.5 : -0.8;
+      // Never hanging plumb: the arm drapes forward over the edge, the leg trails back.
+      const reach = (leg.def.l1 + leg.def.l2) * 0.6, back = leg.def.front ? 2.2 : -2.2;
       const fx = leg.hip.x + vx * reach + f.x * back, fy = leg.hip.y + vy * reach + f.y * back;
       leg.foot.x = lerp(leg.foot.x, fx, k); leg.foot.y = lerp(leg.foot.y, fy, k);
       // A limp, slight bend at the elbow or knee.
-      const bend = leg.def.front ? -0.7 : 0.7;
+      const bend = leg.def.front ? 0.8 : -0.8;
       leg.knee = { x: lerp(leg.knee.x, (leg.hip.x + fx) / 2 + f.x * bend, k), y: lerp(leg.knee.y, (leg.hip.y + fy) / 2 + f.y * bend, k) };
     }
   }
