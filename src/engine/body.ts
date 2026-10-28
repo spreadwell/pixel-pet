@@ -208,6 +208,15 @@ export class Body {
   ground: (x: number, y: number) => number = () => 0;
   /** Crawling under a panel rather than over the terrain. */
   under = false;
+  /** How big the head is relative to the standard profile (width; the neck tapers to match). */
+  headScale = 1;
+
+  /** Half-width of the body at spine point i, with the head scaled. */
+  width(i: number) {
+    const k = i <= NECK ? this.headScale : i <= NECK + 2 ? lerp(this.headScale, 1, (i - NECK) / 3) : 1;
+    return halfWidth(i) * k;
+  }
+
   /** How much the body sways side to side as it walks (trunk flex, path snaking, tail wave). */
   sway = 0.55;
   /** Walk in lateral sequence at low speed, blending into the trot. Off: always trot. */

@@ -1,4 +1,4 @@
-import { Body, Leg, NEARER, SPINE, halfWidth } from './body';
+import { Body, Leg, NEARER, SPINE } from './body';
 import type { Palette } from './palette';
 
 /*
@@ -113,7 +113,7 @@ export class GeckoRenderer {
       const o = castShadow(b, b.z[i], p.x, p.y);
       const g = b.ground(p.x + o + 0.5, p.y + o + 0.5);
       const q = project(p.x + o, p.y + o, g);
-      disc(q.x, q.y, halfWidth(i) * b.breathScale(i) * b.squeeze[i] * (1 + NEARER * g) * res, (x, y) => mark(x, y));
+      disc(q.x, q.y, b.width(i) * b.breathScale(i) * b.squeeze[i] * (1 + NEARER * g) * res, (x, y) => mark(x, y));
     }
     for (const p of this.legPixels(b, pal, flat, this.snappedShadow, res)) {
       const ax = (p.x + 0.5) / res, ay = (p.y + 0.5) / res;
@@ -170,7 +170,7 @@ export class GeckoRenderer {
       const f = b.forward(i);
       const z = b.z[i];
       const { x: cx, y: cy } = project(sp.x, sp.y, z);
-      const r = halfWidth(i) * b.breathScale(i) * b.squeeze[i] * (1 + NEARER * Math.max(0, z)) * res;
+      const r = b.width(i) * b.breathScale(i) * b.squeeze[i] * (1 + NEARER * Math.max(0, z)) * res;
       disc(cx, cy, r, (x, y, dx, dy, d2) => {
         const lx = x - this.bx, ly = y - this.by;
         if (lx < 0 || ly < 0 || lx >= this.bw || ly >= this.bh) return;
@@ -218,7 +218,7 @@ export class GeckoRenderer {
 
     // One dark pixel per eye, on the sides of the skull; closed, it reads as shade.
     for (const side of [1, -1]) {
-      px(at(3, side * (halfWidth(3) - 0.5)), b.lid > 0.55 ? pal.shade : pal.eye);
+      px(at(3, side * (b.width(3) - 0.5)), b.lid > 0.55 ? pal.shade : pal.eye);
     }
 
     // Mouth: when open, the snout tip splits.
@@ -237,7 +237,7 @@ export class GeckoRenderer {
         for (let s = 0.6; s <= len; s += 0.6) px({ x: Math.floor(tip.x + fx * s), y: Math.floor(tip.y + fy * s) }, pal.tongue);
       } else {
         // Eye lick: the tongue sweeps from the snout up over one eye.
-        const eye = project(b.pts[3].x + lx * t.side * halfWidth(3), b.pts[3].y + ly * t.side * halfWidth(3), b.z[3]);
+        const eye = project(b.pts[3].x + lx * t.side * b.width(3), b.pts[3].y + ly * t.side * b.width(3), b.z[3]);
         const u = ext;
         const mx = tip.x + (eye.x - tip.x) * u + fx * 1.2 * s0 * Math.sin(u * Math.PI);
         const my = tip.y + (eye.y - tip.y) * u + fy * 1.2 * s0 * Math.sin(u * Math.PI);
