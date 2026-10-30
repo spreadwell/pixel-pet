@@ -202,8 +202,7 @@ body.pixel-pet-holding * {
   image-rendering: pixelated;
 }
 
-/* Settings pages: an icon before each page's name, and (before Obsidian 1.13, where the
-   pages are drawn in place) a chevron on each link and a back button over each page. */
+/* Settings pages: an icon before each page's name. */
 .pixel-pet-page-icon {
   display: inline-flex;
   margin-right: var(--size-4-2);
@@ -214,20 +213,15 @@ body.pixel-pet-holding * {
   width: var(--icon-s);
   height: var(--icon-s);
 }
-.pixel-pet-page-link {
-  cursor: pointer;
+
+/* Off-screen probes the pet measures with: a colour, and the safe-area insets. */
+.pixel-pet-probe {
+  display: none;
 }
-.pixel-pet-page-chevron {
-  display: flex;
-  color: var(--text-faint);
-}
-.pixel-pet-page-header {
-  display: flex;
-  align-items: center;
-  gap: var(--size-4-2);
-  padding-bottom: var(--size-4-3);
-}
-.pixel-pet-page-title {
-  font-size: var(--font-ui-large);
-  font-weight: var(--font-semibold);
+
+.pixel-pet-insets-probe {
+  position: fixed;
+  visibility: hidden;
+  pointer-events: none;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
 }

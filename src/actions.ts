@@ -36,7 +36,7 @@ const BREAK_AFTER = new Set(['sleep', 'nibble', 'bask']);
  * `at`, CSS px: everything you can ask it to do (dimmed if it can't just now), its panel,
  * and its settings.
  */
-export function showPetMenu(at: { x: number; y: number }, engine: PetEngine, extra: { diary(): void; settings(): void }) {
+export function showPetMenu(at: { x: number; y: number }, engine: PetEngine, extra: { diary: () => void; settings: () => void }) {
   const menu = new Menu();
   for (const a of ACTIONS) {
     const f = current(a, engine), why = engine.unavailable(f.cmd);

@@ -1,3 +1,4 @@
+import type { ObsidianWindow } from './dom';
 import { clamp } from './math';
 
 export interface Palette {
@@ -24,8 +25,8 @@ type Rgb = [number, number, number];
 
 /** Resolve any CSS colour expression (including var(--x)) to rgb via a probe element. */
 export function resolveCssColor(doc: Document, expr: string): Rgb | null {
-  const probe = doc.createElement('span');
-  probe.style.display = 'none';
+  const probe = (doc.win as ObsidianWindow).createSpan();
+  probe.addClass('pixel-pet-probe');
   probe.style.color = expr;
   doc.body.appendChild(probe);
   const out = getComputedStyle(probe).color;

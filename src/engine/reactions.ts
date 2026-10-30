@@ -16,6 +16,7 @@
  * Coordinates are CSS pixels.
  */
 
+import type { ObsidianWindow } from './dom';
 import type { Ghost } from './nibble';
 
 const HIGHLIGHT = 'pixel-pet-jostle';
@@ -58,11 +59,11 @@ export class Reactions {
 
   constructor(private win: Window) {
     const doc = win.document;
-    this.canvas = doc.createElement('canvas');
+    this.canvas = (doc.win as ObsidianWindow).createEl('canvas');
     this.canvas.className = 'pixel-pet-letters';
     this.canvas.setAttribute('aria-hidden', 'true');
     this.ctx = this.canvas.getContext('2d')!;
-    this.top = doc.createElement('canvas');
+    this.top = (doc.win as ObsidianWindow).createEl('canvas');
     this.top.className = 'pixel-pet-carried';
     this.top.setAttribute('aria-hidden', 'true');
     this.topCtx = this.top.getContext('2d')!;
@@ -239,16 +240,15 @@ export class Reactions {
 
   private pressLetter(x: number, y: number, dx: number, dy: number, strength: number) {
     if (!this.highlight || this.letters.length >= MAX_LETTERS) return false;
-    const doc = this.win.document as Document & { caretRangeFromPoint?(x: number, y: number): Range | null };
-    const at = doc.caretRangeFromPoint?.(x, y);
-    if (!at || at.startContainer.nodeType !== Node.TEXT_NODE) return false;
-    const node = at.startContainer as Text;
+    const doc = this.win.document, at = caretAt(doc, x, y);
+    if (!at || at.node.nodeType !== Node.TEXT_NODE) return false;
+    const node = at.node as Text;
     const parent = node.parentElement;
     if (!parent || !parent.closest(LETTER_ROOTS)) return false;
     // The caret lands either side of the letter under the point; take whichever contains it.
     const text = node.data;
     let hit: Range | null = null, offset = -1;
-    for (const o of [at.startOffset, at.startOffset - 1]) {
+    for (const o of [at.offset, at.offset - 1]) {
       if (o < 0 || o >= text.length || !text[o].trim()) continue;
       const r = doc.createRange();
       r.setStart(node, o); r.setEnd(node, o + 1);
@@ -299,4 +299,18 @@ export class Reactions {
     ], { duration: 320, easing: 'ease-out', composite: 'add' });
     return true;
   }
+}
+
+/**
+ * Where a caret would land at (x, y), CSS px: the standard lookup, or WebKit's older one on
+ * devices that don't have it yet.
+ */
+function caretAt(doc: Document, x: number, y: number): { node: Node; offset: number } | null {
+  if (doc.caretPositionFromPoint) {
+    const p = doc.caretPositionFromPoint(x, y);
+    return p ? { node: p.offsetNode, offset: p.offset } : null;
+  }
+  const older = doc as unknown as { caretRangeFromPoint?(x: number, y: number): Range | null };
+  const r = older.caretRangeFromPoint?.(x, y);
+  return r ? { node: r.startContainer, offset: r.startOffset } : null;
 }

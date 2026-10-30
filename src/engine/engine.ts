@@ -1,3 +1,4 @@
+import type { ObsidianWindow } from './dom';
 import { Body } from './body';
 import { BUG_KINDS, BugKind, Pace, Particles, Swarm, paceFactor } from './bugs';
 import { Grabber } from './grab';
@@ -73,7 +74,7 @@ export class PetEngine {
 
   constructor(private win: Window, private opts: PetOptions) {
     const doc = win.document;
-    this.canvas = doc.createElement('canvas');
+    this.canvas = (doc.win as ObsidianWindow).createEl('canvas');
     this.canvas.className = 'pixel-pet-overlay';
     this.canvas.setAttribute('aria-hidden', 'true');
     this.ctx2d = this.canvas.getContext('2d')!;

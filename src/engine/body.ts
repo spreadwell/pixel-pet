@@ -220,9 +220,9 @@ export class Body {
   private path: Pt[] = [];
 
   /** Height of each spine point above the note. */
-  z: number[] = new Array(SPINE).fill(0);
+  z: number[] = new Array<number>(SPINE).fill(0);
   /** Width factor per spine point: below 1 while squeezing through a gap. */
-  squeeze: number[] = new Array(SPINE).fill(1);
+  squeeze: number[] = new Array<number>(SPINE).fill(1);
   /** Terrain height at (x, y); flat unless the engine supplies the workspace's. */
   ground: (x: number, y: number) => number = () => 0;
   /** Crawling under a panel rather than over the terrain. */
@@ -256,7 +256,7 @@ export class Body {
   private rearTarget = 0;
   /** Picked up by the user: which spine point is gripped, and where it is being held. */
   private held: { i: number; x: number; y: number } | null = null;
-  private zDrape: number[] = new Array(SPINE).fill(0);
+  private zDrape: number[] = new Array<number>(SPINE).fill(0);
 
   /** Lateral wiggle of head yaw while idle, for life. */
   private idleSeed = Math.floor(rand(0, 1000));

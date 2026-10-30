@@ -1,3 +1,4 @@
+import type { ObsidianWindow } from './dom';
 import type { Palette } from './palette';
 
 /*
@@ -35,7 +36,7 @@ export class Zzz {
   private drawn = false;
 
   constructor(private win: Window) {
-    this.canvas = win.document.createElement('canvas');
+    this.canvas = (win as ObsidianWindow).createEl('canvas');
     this.canvas.className = 'pixel-pet-zzz';
     this.canvas.setAttribute('aria-hidden', 'true');
     this.ctx = this.canvas.getContext('2d')!;

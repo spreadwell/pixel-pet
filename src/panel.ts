@@ -45,7 +45,7 @@ export class PetPanel extends ItemView {
   }
 
   getViewType() { return PANEL_VIEW; }
-  getDisplayText() { return 'Pixel Pet'; }
+  getDisplayText() { return 'Pet'; }
   getIcon() { return 'paw-print'; }
 
   async onOpen() {
@@ -71,7 +71,7 @@ export class PetPanel extends ItemView {
 
 
     const footer = root.createDiv({ cls: 'pixel-pet-panel-footer' });
-    const settings = footer.createEl('button', { cls: 'clickable-icon pixel-pet-panel-settings', attr: { 'aria-label': 'Pixel Pet settings', type: 'button' } });
+    const settings = footer.createEl('button', { cls: 'clickable-icon pixel-pet-panel-settings', attr: { 'aria-label': 'Open settings', type: 'button' } });
     setIcon(settings.createSpan({ cls: 'pixel-pet-panel-settings-icon' }), 'settings');
     settings.createSpan({ text: 'Settings' });
     settings.addEventListener('click', () => this.openSettings());

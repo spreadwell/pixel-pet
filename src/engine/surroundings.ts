@@ -1,3 +1,4 @@
+import type { ObsidianWindow } from './dom';
 import type { Leg } from './body';
 
 /*
@@ -81,33 +82,35 @@ const TOUCH = 'pixel-pet-touch';
 const TOUCH_DEPTH = 6;
 
 export class HoverSim {
-  private style: HTMLStyleElement;
+  private sheet: HTMLStyleElement;
   private touched = new Set<Element>();
 
   constructor(private win: Window) {
-    this.style = win.document.createElement('style');
-    this.style.id = 'pixel-pet-hover-sim';
+    this.sheet = (win as ObsidianWindow).createEl('style');
+    this.sheet.id = 'pixel-pet-hover-sim';
   }
 
-  attach() { this.win.document.head.appendChild(this.style); this.rebuild(); }
+  attach() { this.win.document.head.appendChild(this.sheet); this.rebuild(); }
 
-  destroy() { this.clear(); this.style.remove(); }
+  destroy() { this.clear(); this.sheet.remove(); }
 
   /** Copy every :hover rule in the loaded styles so that the marker class triggers it too. */
   rebuild() {
     const out: string[] = [];
+    // This window's own rule types: a popout window's rules aren't the main window's kinds.
+    const W = this.win as typeof window;
     const walk = (rules: CSSRuleList, wrap: (s: string) => string) => {
       for (const r of Array.from(rules)) {
-        if (r.type === CSSRule.STYLE_RULE) {
-          const sr = r as CSSStyleRule;
+        if (r instanceof W.CSSStyleRule) {
+          const sr = r;
           if (sr.selectorText.includes(':hover') && !sr.selectorText.includes('pixel-pet')) {
             out.push(wrap(`${sr.selectorText.replace(/:hover/g, `.${TOUCH}`)} { ${sr.style.cssText} }`));
           }
-        } else if (r.type === CSSRule.MEDIA_RULE) {
-          const mr = r as CSSMediaRule;
+        } else if (r instanceof W.CSSMediaRule) {
+          const mr = r;
           walk(mr.cssRules, (s) => wrap(`@media ${mr.conditionText} { ${s} }`));
-        } else if (r.type === CSSRule.SUPPORTS_RULE) {
-          const su = r as CSSSupportsRule;
+        } else if (r instanceof W.CSSSupportsRule) {
+          const su = r;
           walk(su.cssRules, (s) => wrap(`@supports ${su.conditionText} { ${s} }`));
         } else if ('cssRules' in r && (r as CSSGroupingRule).cssRules) {
           walk((r as CSSGroupingRule).cssRules, wrap);
@@ -115,10 +118,10 @@ export class HoverSim {
       }
     };
     for (const sheet of Array.from(this.win.document.styleSheets)) {
-      if (sheet.ownerNode === this.style) continue;
+      if (sheet.ownerNode === this.sheet) continue;
       try { walk(sheet.cssRules, (s) => s); } catch { /* a sheet we may not read */ }
     }
-    this.style.textContent = out.join('\n');
+    this.sheet.textContent = out.join('\n');
   }
 
   /** The elements under these CSS points (and a few of their ancestors) are hovered; others not. */

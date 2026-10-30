@@ -1,3 +1,4 @@
+import type { ObsidianWindow } from './dom';
 import { Rect, clamp } from './math';
 
 /*
@@ -106,15 +107,15 @@ export class World {
   private toArt(r: DOMRect | Rect): Rect {
     const p = this.px;
     const x = 'left' in r ? r.left : r.x, y = 'top' in r ? r.top : r.y;
-    const w = 'width' in r ? r.width : (r as Rect).w, h = 'height' in r ? r.height : (r as Rect).h;
+    const w = 'width' in r ? r.width : r.w, h = 'height' in r ? r.height : r.h;
     return { x: x / p, y: y / p, w: w / p, h: h / p };
   }
 
   /** Safe-area insets (notch, home indicator), CSS px. */
   private insets() {
     const doc = this.win.document;
-    const probe = doc.createElement('div');
-    probe.style.cssText = 'position:fixed;visibility:hidden;pointer-events:none;padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)';
+    const probe = (doc.win as ObsidianWindow).createDiv();
+    probe.addClass('pixel-pet-insets-probe');
     doc.body.appendChild(probe);
     const s = getComputedStyle(probe);
     const out = { t: parseFloat(s.paddingTop) || 0, r: parseFloat(s.paddingRight) || 0, b: parseFloat(s.paddingBottom) || 0, l: parseFloat(s.paddingLeft) || 0 };

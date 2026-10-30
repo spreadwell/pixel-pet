@@ -1,5 +1,4 @@
-import * as obsidian from 'obsidian';
-import { App, PluginSettingTab, Setting, setIcon } from 'obsidian';
+import { App, Modal, PluginSettingTab, Setting, SettingPage, setIcon } from 'obsidian';
 import type { SettingDefinitionItem } from 'obsidian';
 import type PixelPetPlugin from './main';
 import { BUG_KINDS, type BugKind, type Pace } from './engine/bugs';
@@ -63,9 +62,10 @@ export const MISCHIEF_MINUTES: Record<MischiefOften, [number, number]> = {
 
 /** Saved settings, filled out with the defaults, and older ones carried over. */
 export function settingsFrom(data: Record<string, unknown> | null): PetSettings {
-  const d = { ...(data ?? {}) } as Record<string, any>;
+  const d: Record<string, unknown> = { ...(data ?? {}) };
+  const saved = d.critters as Partial<Record<BugKind, Partial<CritterSettings>>> | undefined;
   const critters = structuredClone(DEFAULT_SETTINGS.critters);
-  if (d.critters) for (const k of BUG_KINDS) Object.assign(critters[k], d.critters[k]);
+  if (saved) for (const k of BUG_KINDS) Object.assign(critters[k], saved[k]);
   else {
     // Older versions: a flies toggle and slider, and a crickets toggle.
     if (d.bugsFromWriting === false) critters.fly.words = 0;
@@ -73,7 +73,7 @@ export function settingsFrom(data: Record<string, unknown> | null): PetSettings 
     if (typeof d.crickets === 'boolean') critters.cricket.enabled = d.crickets;
   }
   for (const k of ['bugsFromWriting', 'wordsPerBug', 'bugsFromTasks', 'crickets']) delete d[k];
-  return { ...DEFAULT_SETTINGS, ...d, critters } as PetSettings;
+  return { ...DEFAULT_SETTINGS, ...d, critters };
 }
 
 const NAMES: Record<BugKind, { one: string; many: string }> = {
@@ -93,18 +93,13 @@ const REPO = 'https://github.com/spreadwell/pixel-pet';
 /** Where to find the developer's other plugins. */
 const MORE = 'https://community.obsidian.md/users/giblicious';
 
-interface PageCompat { title: string; containerEl: HTMLElement; display(): void; hide(): void; }
-
 /**
  * Settings as pages, the way Butter Editor lays them out: an index of pages, each made of
- * titled groups. On Obsidian 1.13+ these are its own settings pages (with its back button
- * and titlebar); before that, the same index and pages are drawn in place.
+ * titled groups, shown as Obsidian's own settings pages (with its back button and titlebar).
  */
 export class PixelPetSettingTab extends PluginSettingTab {
-  /** The page shown, when drawing pages in place (before Obsidian 1.13). */
-  private open: Section | null = null;
   /** Re-draws whatever page is showing, after a change that adds or removes rows. */
-  private redraw: () => void = () => this.display();
+  private redraw: () => void = () => {};
   private icons: MutationObserver | null = null;
 
   constructor(app: App, private plugin: PixelPetPlugin) {
@@ -112,10 +107,10 @@ export class PixelPetSettingTab extends PluginSettingTab {
   }
 
   getSettingDefinitions(): SettingDefinitionItem[] {
-    const Base = (obsidian as unknown as { SettingPage?: new () => PageCompat }).SettingPage;
-    if (typeof Base !== 'function') return [];
     this.watchIcons();
-    const tab = this;
+    // The page's own `this` is the page; these reach back to the tab.
+    const setRedraw = (f: () => void) => { this.redraw = f; };
+    const render = (el: HTMLElement, id: Section) => this.renderSection(el, id);
     return [{
       type: 'group',
       items: PAGES.map((p) => ({
@@ -123,15 +118,15 @@ export class PixelPetSettingTab extends PluginSettingTab {
         name: p.name,
         desc: p.desc,
         page: () => {
-          const page = new (class extends Base {
+          const page = new (class extends SettingPage {
             display() {
-              tab.redraw = () => this.display();
+              setRedraw(() => this.display());
               this.containerEl.empty();
-              tab.renderSection(this.containerEl, p.id);
+              render(this.containerEl, p.id);
             }
           })();
           page.title = p.name;
-          return page as unknown as obsidian.SettingPage;
+          return page;
         },
       })),
     }, {
@@ -158,39 +153,6 @@ export class PixelPetSettingTab extends PluginSettingTab {
     this.plugin.register(() => this.icons?.disconnect());
     decorate();
   }
-
-  /** Before Obsidian 1.13: the index, or the open page, drawn in place. */
-  display() {
-    const el = this.containerEl;
-    el.empty();
-    this.redraw = () => this.display();
-    const page = PAGES.find((p) => p.id === this.open);
-    if (!page) {
-      const items = group(el);
-      for (const p of PAGES) {
-        const row = new Setting(items).setName(p.name).setDesc(p.desc);
-        row.settingEl.addClasses(['mod-navigable', 'pixel-pet-page-link']);
-        row.settingEl.setAttrs({ role: 'button', tabindex: '0' });
-        const icon = createSpan({ cls: 'pixel-pet-page-icon' });
-        setIcon(icon, p.icon);
-        row.nameEl.prepend(icon);
-        setIcon(row.controlEl.createSpan({ cls: 'pixel-pet-page-chevron' }), 'chevron-right');
-        const go = () => { this.open = p.id; this.display(); el.scrollTop = 0; };
-        row.settingEl.addEventListener('click', go);
-        row.settingEl.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); } });
-      }
-      moreBanner(new Setting(group(el)));
-      return;
-    }
-    const header = el.createDiv({ cls: 'pixel-pet-page-header' });
-    const back = header.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': 'Back', type: 'button' } });
-    setIcon(back, 'chevron-left');
-    back.addEventListener('click', () => { this.open = null; this.display(); el.scrollTop = 0; });
-    header.createDiv({ cls: 'pixel-pet-page-title', text: page.name });
-    this.renderSection(el.createDiv(), page.id);
-  }
-
-  hide() { this.open = null; }
 
   private renderSection(el: HTMLElement, section: Section) {
     if (section === 'general') this.renderGeneral(el);
@@ -245,7 +207,7 @@ export class PixelPetSettingTab extends PluginSettingTab {
     const nature = group(el, 'Nature');
     new Setting(nature)
       .setName('Temperament')
-      .setDesc('“Its own” is the nature it was born with. The others nudge it, and some of its own still shows through.')
+      .setDesc('Keep the nature it was born with, or nudge it another way. Some of its own nature always shows through.')
       .addDropdown((d) => d
         .addOptions({ own: 'Its own', lazy: 'Lazy', energetic: 'Energetic', bold: 'Bold' })
         .setValue(s.temperament)
@@ -254,8 +216,9 @@ export class PixelPetSettingTab extends PluginSettingTab {
       .setName('As it is now')
       .setDesc(s.traits ? describe(natureOf(s.traits, s.temperament)) : '')
       .addButton((b) => b.setButtonText('New personality').onClick(() => {
-        if (!window.confirm('Give your pet a whole new personality? Its old one can’t be brought back.')) return;
-        void this.plugin.newPersonality().then(() => this.redraw());
+        new ConfirmModal(this.app, 'New personality', 'Give your pet a whole new personality? Its old one can’t be brought back.', 'New personality', () => {
+          void this.plugin.newPersonality().then(() => this.redraw());
+        }).open();
       }));
 
     const habits = group(el, 'Habits');
@@ -341,8 +304,25 @@ function moreBanner(setting: Setting) {
   const icon = setting.nameEl.createSpan({ cls: 'pixel-pet-page-icon' });
   setIcon(icon, 'puzzle');
   setting.nameEl.createSpan({ text: 'More plugins by Spreadwell' });
-  setting.setDesc('Other plugins from the maker of Pixel Pet.');
+  setting.setDesc('Other plugins from the same maker.');
   setting.addButton((b) => b.setButtonText('Take a look').onClick(() => window.open(MORE)));
+}
+
+/** Asks before something that can't be undone; `yes` runs only if confirmed. */
+class ConfirmModal extends Modal {
+  constructor(app: App, title: string, private question: string, private action: string, private yes: () => void) {
+    super(app);
+    this.setTitle(title);
+  }
+
+  onOpen() {
+    this.contentEl.createEl('p', { text: this.question });
+    new Setting(this.contentEl)
+      .addButton((b) => b.setButtonText('Cancel').onClick(() => this.close()))
+      .addButton((b) => b.setButtonText(this.action).setDestructive().setCta().onClick(() => { this.close(); this.yes(); }));
+  }
+
+  onClose() { this.contentEl.empty(); }
 }
 
 /** A titled group of settings, in Obsidian's own grouped style: returns where its rows go. */

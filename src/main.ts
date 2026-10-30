@@ -67,7 +67,7 @@ export default class PixelPetPlugin extends Plugin {
   }
 
   async loadSettings() {
-    this.settings = settingsFrom(await this.loadData());
+    this.settings = settingsFrom((await this.loadData()) as Record<string, unknown> | null);
     // Every gecko gets its own personality the first time, and keeps it.
     if (!this.settings.traits) {
       this.settings.traits = rollTraits();
@@ -171,9 +171,9 @@ export default class PixelPetPlugin extends Plugin {
     const key = file.path;
     const prev = this.pending.get(key);
     if (prev) window.clearTimeout(prev);
-    this.pending.set(key, window.setTimeout(async () => {
+    this.pending.set(key, window.setTimeout(() => {
       this.pending.delete(key);
-      this.feed(key, await this.app.vault.cachedRead(file));
+      void this.app.vault.cachedRead(file).then((text) => this.feed(key, text));
     }, 1200));
   }
 

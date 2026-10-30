@@ -312,6 +312,47 @@ class HeadLookBehavior {
 // update() returns the target speed (art px per tick) and optionally a transition.
 
 type Result = { targetSpeed: number; transition?: State };
+/**
+ * What a state keeps while it runs. Each state's handler sets the few fields it uses when it
+ * begins (see `scratch`), so a field is only read in the state that wrote it.
+ */
+interface StateData {
+  phase: string; next: string; t: number; timer: number; phaseTimer: number; duration: number;
+  nextLookTime: number; nextTongueTime: number; nextBlinkTime: number; nextBlink: number;
+  // EXPLORE
+  investigateTime: number; investigating: boolean; wallFollowing: boolean; wallFollowTimer: number; wallAngle: number;
+  lookCount: number; maxLooks: number;
+  // BASKING
+  warm: Pt; going: boolean; onWarm: boolean; leg: number;
+  // HUNT
+  stalkTime: number; lungeTimer: number; lure: boolean; readyFor: number; reach: number; forLure: boolean; hurry: boolean;
+  // STARTLE, FLEE
+  freeze: number; stay: boolean; away: number; jink: number; nextJink: number; look: number; lookFor: number;
+  // SLEEP
+  nextPeekTime: number; peekUntil: number; wakeAt: number; asleepAt: number;
+  // NIBBLE and stealing
+  flicks: number; slot: Pt; toLetter: number; stuck: boolean; len: number;
+  // LURK, CURIOUS, RETREAT, and arriving anywhere
+  target: 'caret' | 'pointer'; spot: Pt; anchor: Pt; frozen: boolean; waryFor: number; leaveAt: number; keep: number;
+  waited: number; out: Pt; since: number; spin: number; spinAt: number; spinFrom: number; lastAngle: number;
+  // INSPECT, SCOUT, SEARCH
+  sniffs: number; stops: Pt[]; i: number; pause: number; at: Rect | null; done: Rect | null; chosen: string; seen: number; wait: number;
+  // PLAY
+  id: string; rounds: number; from: Pt; to: Pt; bowFor: number; dribbleFor: number; wander: number;
+  // PRANK
+  prank: PrankTarget; btn: Pt; h: Pt; end: Pt;
+  // NAP
+  face: 1 | -1; far: number; corner: number; ledge: number; x: number; tilt: number; stand: number; droop: number;
+  front: number; hind: number; lids: number; sleepFor: number;
+  // HIDE
+  looks: number;
+}
+
+/** A state's starting fields; the rest are unset until the state itself sets them. */
+const scratch = (d: { [K in keyof StateData]?: StateData[K] | null }) => d as StateData;
+/** Lets a state look for a new spot (it has none until then; see `scratch`). */
+const unspot = (sd: StateData) => { (sd as { spot: Pt | null }).spot = null; };
+
 interface Handler { enter(g: Personality): void; update(g: Personality): Result; }
 
 const StateHandlers: Record<State, Handler> = {
@@ -319,12 +360,12 @@ const StateHandlers: Record<State, Handler> = {
     enter(g) {
       const urgency = Math.max(g.needs.hungerFactor * 0.7, g.needs.fullness > 0.7 ? (g.needs.fullness - 0.7) * 2 : 0);
       const baseDur = g.traits.resolve('idleDuration');
-      g.stateData = {
+      g.stateData = scratch({
         duration: (baseDur + Math.random() * baseDur * 2) * (1 - urgency),
         nextLookTime: 20 + Math.random() * 40,
         nextTongueTime: 40 + Math.random() * 80,
         nextBlinkTime: 30 + Math.random() * 60,
-      };
+      });
       // Now and then, a push-up display while it stands there.
       if (Math.random() < 0.15) g.schedulePushups(10 + Math.random() * 30);
     },
@@ -361,7 +402,7 @@ const StateHandlers: Record<State, Handler> = {
       const nearHome = g.distTo(g.homeX, g.homeY) < 80 * S;
       const baseDur = g.traits.resolve('baskDuration');
       const fullBonus = nearHome && g.needs.hunger > 70 ? g.needs.fullness * baseDur * 1.5 : 0;
-      g.stateData = { duration: baseDur + Math.random() * baseDur * 1.5 + fullBonus, nextLookTime: 60 + Math.random() * 80, nextBlinkTime: 40 + Math.random() * 50 };
+      g.stateData = scratch({ duration: baseDur + Math.random() * baseDur * 1.5 + fullBonus, nextLookTime: 60 + Math.random() * 80, nextBlinkTime: 40 + Math.random() * 50 });
       const warm = g.petted ? null : g.warmSpot(360);
       if (warm) { g.stateData.warm = warm; g.stateData.going = true; g.stateData.leg = 0; g.planRoute(warm.x, warm.y); return; }
       if (!g.petted) g.c.log?.('bask', 'Basked');
@@ -398,7 +439,7 @@ const StateHandlers: Record<State, Handler> = {
   [STATE.EXPLORE]: {
     enter(g) {
       g.pickDestination();
-      g.stateData = { investigateTime: 0, investigating: false, wallFollowing: false, wallFollowTimer: 0, wallAngle: 0, lookCount: 0, maxLooks: 0 };
+      g.stateData = scratch({ investigateTime: 0, investigating: false, wallFollowing: false, wallFollowTimer: 0, wallAngle: 0, lookCount: 0, maxLooks: 0 });
     },
     update(g) {
       const head = g.head;
@@ -474,7 +515,7 @@ const StateHandlers: Record<State, Handler> = {
   },
 
   [STATE.HUNT]: {
-    enter(g) { g.stateData = { phase: 'stalk', stalkTime: 0, lungeTimer: 0, lure: !g.targetBug && !!g.lure }; },
+    enter(g) { g.stateData = scratch({ phase: 'stalk', stalkTime: 0, lungeTimer: 0, lure: !g.targetBug && !!g.lure }); },
     update(g) {
       const head = g.head;
       const bug = g.targetBug;
@@ -549,7 +590,7 @@ const StateHandlers: Record<State, Handler> = {
   [STATE.STARTLE]: {
     enter(g) {
       const head = g.head, aware = g.traits.traits.awareness ?? 0.5;
-      g.stateData = { freeze: 8 + (1 - aware) * 14 + Math.random() * 8 };
+      g.stateData = scratch({ freeze: 8 + (1 - aware) * 14 + Math.random() * 8 });
       g.headLook.snapTo(angleDiff(g.angle, Math.atan2(g.threatY - head.y, g.threatX - head.x)));
       g.currentSpeed = 0;
       g.alarm = 40;
@@ -580,7 +621,7 @@ const StateHandlers: Record<State, Handler> = {
     enter(g) {
       const baseFlee = g.traits.resolve('fleeDuration');
       const head = g.head, away = Math.atan2(head.y - g.threatY, head.x - g.threatX);
-      g.stateData = { duration: (baseFlee + Math.random() * baseFlee) * (g.mildScare ? 0.5 : 1), away, jink: 0, nextJink: 0, phase: 'run', look: 0, lookFor: 0 };
+      g.stateData = scratch({ duration: (baseFlee + Math.random() * baseFlee) * (g.mildScare ? 0.5 : 1), away, jink: 0, nextJink: 0, phase: 'run', look: 0, lookFor: 0 });
       g.targetAngle = away + (Math.random() - 0.5) * 0.6;
       g.angle = lerpAngle(g.angle, g.targetAngle, 0.6);
       if (!g.mildScare && !g.c.opts.reducedMotion) g.currentSpeed = g.speed * g.traits.resolve('fleeMultiplier');
@@ -624,7 +665,7 @@ const StateHandlers: Record<State, Handler> = {
     enter(g) {
       g.body.curlStyle = 'coil';
       const baseSleep = g.traits.resolve('sleepDuration');
-      g.stateData = { duration: baseSleep + Math.random() * baseSleep * 1.3, nextPeekTime: 60 + Math.random() * 100, peekUntil: 0, wakeAt: 0, asleepAt: 0 };
+      g.stateData = scratch({ duration: baseSleep + Math.random() * baseSleep * 1.3, nextPeekTime: 60 + Math.random() * 100, peekUntil: 0, wakeAt: 0, asleepAt: 0 });
       g.sleepPeeking = false;
       g.body.curlDir = Math.random() > 0.5 ? 1 : -1;
     },
@@ -658,7 +699,7 @@ const StateHandlers: Record<State, Handler> = {
 
   [STATE.NIBBLE]: {
     enter(g) {
-      g.stateData = { phase: 'approach', timer: 0, flicks: 0 };
+      g.stateData = scratch({ phase: 'approach', timer: 0, flicks: 0 });
       if (g.letterAt) g.planRoute(g.letterAt.x, g.letterAt.y);
     },
     update(g) {
@@ -703,7 +744,7 @@ const StateHandlers: Record<State, Handler> = {
 
   // Something opened over the workspace (a modal, the command palette): freeze and watch it.
   [STATE.WATCH]: {
-    enter(g) { g.stateData = { nextBlink: 40 }; g.currentSpeed = 0; },
+    enter(g) { g.stateData = scratch({ nextBlink: 40 }); g.currentSpeed = 0; },
     update(g) {
       const w = g.watching, head = g.head, t = g.stateTimer;
       if (w) g.headLook.lookAt(angleDiff(g.angle, Math.atan2(w.y - head.y, w.x - head.x)));
@@ -719,7 +760,7 @@ const StateHandlers: Record<State, Handler> = {
   // when it freezes, and keeps a little way off; if it comes too close it startles and
   // scurries back, watches a moment, and starts creeping in again.
   [STATE.LURK]: {
-    enter(g) { g.stateData = { phase: 'stalk', spot: null, anchor: null, timer: 0, phaseTimer: 0, target: g.lurkTarget }; },
+    enter(g) { g.stateData = scratch({ phase: 'stalk', spot: null, anchor: null, timer: 0, phaseTimer: 0, target: g.lurkTarget }); },
     update(g) {
       const sd = g.stateData, head = g.head, w = g.c.world;
       sd.timer++;
@@ -747,7 +788,7 @@ const StateHandlers: Record<State, Handler> = {
         // Frozen, head turned to watch it, before it dares to creep back in. (It turns its
         // head rather than shuffling round, which in a tight spot tied it in knots.)
         g.headLook.lookAt(angleDiff(g.angle, toCaret));
-        if (sd.phaseTimer > sd.waryFor) { sd.phase = 'stalk'; sd.phaseTimer = 0; sd.spot = null; }
+        if (sd.phaseTimer > sd.waryFor) { sd.phase = 'stalk'; sd.phaseTimer = 0; unspot(sd); }
         return { targetSpeed: 0 };
       }
 
@@ -784,7 +825,7 @@ const StateHandlers: Record<State, Handler> = {
   // The pointer is resting some way off: mild interest. It turns to look, and drifts a
   // little closer now and then, unhurried; close enough, it stalks it as it does the caret.
   [STATE.CURIOUS]: {
-    enter(g) { g.stateData = { spot: null, anchor: null, timer: 0, leaveAt: 1200 + Math.random() * 1200, keep: STALK_RADIUS + 12, waited: 0 }; },
+    enter(g) { g.stateData = scratch({ spot: null, anchor: null, timer: 0, leaveAt: 1200 + Math.random() * 1200, keep: STALK_RADIUS + 12, waited: 0 }); },
     update(g) {
       const sd = g.stateData, head = g.head, p = g.pointer, w = g.c.world;
       sd.timer++;
@@ -803,7 +844,7 @@ const StateHandlers: Record<State, Handler> = {
       }
       if (g.arrived(sd)) {
         // Having watched a while, it dares a little closer — until it is close enough to stalk.
-        if (++sd.waited > 120 + Math.random() * 60) { sd.waited = 0; sd.keep -= 12; sd.spot = null; }
+        if (++sd.waited > 120 + Math.random() * 60) { sd.waited = 0; sd.keep -= 12; unspot(sd); }
         if (sd.timer % 200 === 100) g.flick();
         return { targetSpeed: 0 };
       }
@@ -818,7 +859,7 @@ const StateHandlers: Record<State, Handler> = {
   // You stopped typing: come and sniff along the words you just wrote.
   [STATE.INSPECT]: {
     enter(g) {
-      g.stateData = { phase: 'go', timer: 0, sniffs: 0 };
+      g.stateData = scratch({ phase: 'go', timer: 0, sniffs: 0 });
       const k = g.inkAt;
       if (k) g.planRoute(k.x, k.y);
     },
@@ -855,7 +896,7 @@ const StateHandlers: Record<State, Handler> = {
   // throat), then a lick and a contented blink.
   [STATE.FEAST]: {
     enter(g) {
-      g.stateData = { t: 0 };
+      g.stateData = scratch({ t: 0 });
       g.currentSpeed = 0;
       g.body.wiggle = 0;
       g.body.mouth = 1;
@@ -896,7 +937,7 @@ const StateHandlers: Record<State, Handler> = {
   // to look about and taste the words, before settling in.
   [STATE.SCOUT]: {
     enter(g) {
-      g.stateData = { stops: g.scoutStops, i: 0, pause: 0, leg: 0 };
+      g.stateData = scratch({ stops: g.scoutStops, i: 0, pause: 0, leg: 0 });
       g.flick();
       g.c.log?.('explore', 'Explored');
     },
@@ -927,7 +968,7 @@ const StateHandlers: Record<State, Handler> = {
   // closed, or left alone a good while, it wanders off.
   [STATE.SEARCH]: {
     enter(g) {
-      g.stateData = { at: null, done: null, chosen: '', pause: 0, leg: 0, seen: 0, wait: 0, t: 0 };
+      g.stateData = scratch({ at: null, done: null, chosen: '', pause: 0, leg: 0, seen: 0, wait: 0, t: 0 });
       g.flick();
       g.c.log?.('search', 'Sniffed out your search');
     },
@@ -975,7 +1016,7 @@ const StateHandlers: Record<State, Handler> = {
   // where it is safe, and wait there watching until things settle.
   [STATE.RETREAT]: {
     enter(g) {
-      g.stateData = { spot: g.retreatTo!, out: g.retreatOut!, phase: 'run', wait: 150 + Math.random() * 200 };
+      g.stateData = scratch({ spot: g.retreatTo!, out: g.retreatOut!, phase: 'run', wait: 150 + Math.random() * 200 });
       g.planRoute(g.retreatTo!.x, g.retreatTo!.y);
       g.flick();
       g.c.log?.('retreat', 'Hid on the side panel');
@@ -984,7 +1025,7 @@ const StateHandlers: Record<State, Handler> = {
       const sd = g.stateData, head = g.head;
       if (sd.phase === 'run') {
         if (g.arrived(sd) || g.stateTimer > 400) {
-          sd.phase = 'wait'; sd.from = g.stateTimer;
+          sd.phase = 'wait'; sd.since = g.stateTimer;
           // Face back out at the note it came from.
           g.targetAngle = Math.atan2(sd.out.y - head.y, sd.out.x - head.x);
           return { targetSpeed: 0 };
@@ -993,7 +1034,7 @@ const StateHandlers: Record<State, Handler> = {
         g.targetAngle = Math.atan2(wp.y - head.y, wp.x - head.x);
         return { targetSpeed: g.c.opts.reducedMotion ? g.speed : g.speed * 2.2 };
       }
-      const t = g.stateTimer - sd.from;
+      const t = g.stateTimer - sd.since;
       if (t % 70 === 30) g.headLook.look();
       if (t % 90 === 60) g.flick();
       if (t > sd.wait) return { targetSpeed: 0, transition: STATE.IDLE };
@@ -1011,7 +1052,7 @@ const StateHandlers: Record<State, Handler> = {
       const balls = g.c.graph?.balls() ?? [];
       let best: Ball | null = null;
       for (const b of balls) if (!best || g.distTo(b.x, b.y) < g.distTo(best.x, best.y)) best = b;
-      g.stateData = { id: best?.id, phase: 'approach', t: 0, rounds: 4 + Math.floor(Math.random() * 4) };
+      g.stateData = scratch({ id: best?.id, phase: 'approach', t: 0, rounds: 4 + Math.floor(Math.random() * 4) });
     },
     update(g) {
       const sd = g.stateData, pg = g.c.graph, head = g.head, b = g.body;
@@ -1138,11 +1179,11 @@ const StateHandlers: Record<State, Handler> = {
       const rough = stand(first, side).end;
       const best = stand(b.unproject(t.x, t.y, { x: rough.x - hx * mid, y: rough.y - hy * mid }), side);
       const end = best.end, spot = { x: end.x - hx * 26, y: end.y - hy * 26 };
-      g.stateData = { phase: 'go', target: t, at: { x: t.x, y: t.y }, h: { x: hx, y: hy }, spot, end, t: 0 };
+      g.stateData = scratch({ phase: 'go', prank: t, btn: { x: t.x, y: t.y }, h: { x: hx, y: hy }, spot, end, t: 0 });
       g.planRoute(spot.x, spot.y);
     },
     update(g) {
-      const sd = g.stateData, b = g.body, head = g.head, t: PrankTarget = sd.target;
+      const sd = g.stateData, b = g.body, head = g.head, t: PrankTarget = sd.prank;
       sd.t++;
       const ease = (a: number, d: number) => smoothstep(clamp((sd.t - a) / d, 0, 1));
       const facing = Math.atan2(sd.h.y, sd.h.x);
@@ -1164,7 +1205,7 @@ const StateHandlers: Record<State, Handler> = {
         }
         case 'raise': {
           g.targetAngle = facing;
-          g.headLook.lookAt(angleDiff(g.angle, Math.atan2(sd.at.y - head.y, sd.at.x - head.x)));
+          g.headLook.lookAt(angleDiff(g.angle, Math.atan2(sd.btn.y - head.y, sd.btn.x - head.x)));
           // Up on its front legs, the hand raised high over the button...
           b.pushup = 1.4 * ease(0, 20) * (1 - ease(104, 16));
           let z = PRANK_RAISE * ease(0, 24);
@@ -1172,13 +1213,13 @@ const StateHandlers: Record<State, Handler> = {
           if (sd.t >= 24 && sd.t < 70) z = PRANK_RAISE + Math.sin((sd.t - 24) * 0.45) * 0.6;
           // ...and down it comes.
           if (sd.t >= 70) z = PRANK_RAISE * (1 - ease(70, 6));
-          b.reach = { x: sd.at.x, y: sd.at.y, z, k: ease(0, 20) * (1 - ease(100, 18)) };
+          b.reach = { x: sd.btn.x, y: sd.btn.y, z, k: ease(0, 20) * (1 - ease(100, 18)) };
           if (sd.t === 12 && t.ok()) { t.hover(true); g.pressing = t; }
           if (sd.t === 76) {
             t.down(true);
             if (t.kind === 'food') g.snackCooldown = SNACK_EVERY[0] + Math.random() * (SNACK_EVERY[1] - SNACK_EVERY[0]);
             else g.mischiefCooldown = g.mischiefGap();
-            g.c.particles.burst(sd.at.x, sd.at.y, g.c.pal.ink, 5, 16);
+            g.c.particles.burst(sd.btn.x, sd.btn.y, g.c.pal.ink, 5, 16);
           }
           if (sd.t === 86) {
             t.down(false);
@@ -1189,7 +1230,7 @@ const StateHandlers: Record<State, Handler> = {
           if (sd.t >= 120) {
             b.reach = null; b.pushup = 0;
             if (t.kind === 'food') return { targetSpeed: 0, transition: STATE.IDLE };
-            g.scamperFrom(sd.at);
+            g.scamperFrom(sd.btn);
             return { targetSpeed: g.speed };
           }
           return { targetSpeed: 0 };
@@ -1209,7 +1250,7 @@ const StateHandlers: Record<State, Handler> = {
       // It comes in from just past the block's end, along the edge, so it's lying straight
       // along it with its tail trailing out over the end.
       const corner = face > 0 ? r.x : r.x + r.w, far = face > 0 ? r.x + r.w - 14 : r.x + 14;
-      g.stateData = { phase: 'go', face, spot: { x: corner - face * 12, y }, end: { x, y }, far, corner, ledge: r.y, tilt: 0, stand: 1, droop: 0, front: 0, hind: 0, lids: 0, sleepFor: 600 + Math.random() * 900, t: 0 };
+      g.stateData = scratch({ phase: 'go', face, spot: { x: corner - face * 12, y }, end: { x, y }, far, corner, ledge: r.y, tilt: 0, stand: 1, droop: 0, front: 0, hind: 0, lids: 0, sleepFor: 600 + Math.random() * 900, t: 0 });
       g.planRoute(corner - face * 12, y);
     },
     update(g) {
@@ -1299,7 +1340,7 @@ const StateHandlers: Record<State, Handler> = {
 
   // Picked up by the user. The body dangles and squirms; the mind just waits to be let go.
   [STATE.HELD]: {
-    enter(g) { g.stateData = {}; g.currentSpeed = 0; },
+    enter(g) { g.stateData = scratch({}); g.currentSpeed = 0; },
     update(g) {
       if (g.stateTimer % 40 === 15) g.flick();
       return { targetSpeed: 0 };
@@ -1310,7 +1351,7 @@ const StateHandlers: Record<State, Handler> = {
   // look about, then come out — or think better of it and go back under.
   [STATE.HIDE]: {
     enter(g) {
-      g.stateData = { phase: g.hideFast ? 'slip' : 'approach', timer: 0, wait: 0, looks: 0 };
+      g.stateData = scratch({ phase: g.hideFast ? 'slip' : 'approach', timer: 0, wait: 0, looks: 0 });
       if (g.cover && !g.hideFast) g.planRoute(g.cover.x - g.cover.nx * 8, g.cover.y - g.cover.ny * 8);
     },
     update(g) {
@@ -1455,9 +1496,8 @@ export class Personality {
 
   state: State = STATE.IDLE;
   stateTimer = 0;
-  // Per-state scratch; each handler owns its own shape, as in the original.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  stateData: any = {};
+  // Per-state scratch: each handler uses its own few fields of it.
+  stateData: StateData = scratch({});
   destX = 0;
   destY = 0;
   homeX = 0;
@@ -1734,7 +1774,7 @@ export class Personality {
     }
     this.state = state;
     this.stateTimer = 0;
-    this.stateData = {};
+    this.stateData = scratch({});
     StateHandlers[state].enter(this);
     if (state === STATE.HIDE && this.body.under && this.c.world.coverAt(this.head.x, this.head.y) && this.stateData.phase === 'approach') {
       this.stateData.phase = 'under';
@@ -2142,7 +2182,7 @@ export class Personality {
       case STATE.SCOUT: return 'Exploring the note';
       case STATE.RETREAT: return 'Hiding on the side panel';
       case STATE.PLAY: return 'Playing';
-      case STATE.PRANK: return sd.target?.kind === 'food' ? 'Asking for food' : 'Up to something';
+      case STATE.PRANK: return sd.prank?.kind === 'food' ? 'Asking for food' : 'Up to something';
       case STATE.SEARCH: return 'Following your search';
       default: return s;
     }
