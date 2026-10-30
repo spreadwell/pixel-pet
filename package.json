@@ -1,6 +1,6 @@
 {
   "name": "pixel-pet",
-  "version": "0.4.6",
+  "version": "0.4.7",
   "private": true,
   "description": "A pixel pet that lives in your workspace. It hides under your panels, crosses your notes and hunts the bugs your writing attracts. Starts with a gecko.",
   "main": "main.js",
