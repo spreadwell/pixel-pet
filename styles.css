@@ -7,7 +7,6 @@
   pointer-events: none;
   z-index: calc(var(--layer-popover, 30) - 1);
   image-rendering: pixelated;
-  image-rendering: crisp-edges;
 }
 
 /* A nibbled letter is only painted transparent; the note text is untouched. */
@@ -15,14 +14,15 @@
   color: transparent;
 }
 
-/* Over the pet the cursor becomes a hand: it can be picked up and carried. */
-body.pixel-pet-hover,
-body.pixel-pet-hover * {
-  cursor: grab !important;
+/* Over the pet the cursor becomes a hand: it can be picked up and carried. The
+   :not(#pixel-pet) only lifts these above every other cursor rule. */
+body.pixel-pet-hover:not(#pixel-pet),
+body.pixel-pet-hover:not(#pixel-pet) * {
+  cursor: grab;
 }
-body.pixel-pet-holding,
-body.pixel-pet-holding * {
-  cursor: grabbing !important;
+body.pixel-pet-holding:not(#pixel-pet),
+body.pixel-pet-holding:not(#pixel-pet) * {
+  cursor: grabbing;
 }
 
 /* Letters dipping under the pet's feet are drawn on this layer, just below the pet,
