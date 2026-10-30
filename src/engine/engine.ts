@@ -223,6 +223,10 @@ export class PetEngine {
    * length past it), and once the scrolling stops it hurries back in.
    */
   private scrolled(box: DOMRect, dx: number, dy: number) {
+    // Whatever moved with it (the gecko, bugs, footprints, pressed letters) is drawn again
+    // this very frame, not at the next simulation tick.
+    this.scrollDirty = true;
+    this.scrollAt = performance.now();
     const b = this.body, px = this.opts.px;
     const inside = (x: number, y: number) => x * px > box.left && x * px < box.right && y * px > box.top && y * px < box.bottom;
     const ax = -dx / px, ay = -dy / px;
@@ -265,6 +269,10 @@ export class PetEngine {
   private returning = false;
   private returnedAt = 0;
   private lastScroll = 0;
+  /** The page scrolled since the last frame was drawn. */
+  private scrollDirty = false;
+  /** When anything last scrolled (ms). */
+  private scrollAt = -Infinity;
 
   /** After a scroll carried it out of view: once the scrolling stops, come back in. */
   private comeBack() {
@@ -463,8 +471,11 @@ export class PetEngine {
     // A sleeping gecko with nothing around only needs a few frames a second, and on
     // battery-powered devices the frame rate is capped, except while it's moving fast
     // (a strike, a bolt, play, being carried), which at the cap would look like jumps.
-    const quiet = this.brain.state === STATE.SLEEP && !this.swarm.bugs.length && !this.particles.active && !this.prints.active;
-    const minFrame = quiet ? 1 / 12 : this.opts.maxFps && !this.brain.quick ? 1 / this.opts.maxFps : 0;
+    // While the page scrolls, it keeps up with it every display frame, cap or no cap.
+    this.happenings.poll();
+    const scrolling = t - this.scrollAt < 250;
+    const quiet = !scrolling && this.brain.state === STATE.SLEEP && !this.swarm.bugs.length && !this.particles.active && !this.prints.active;
+    const minFrame = quiet ? 1 / 12 : this.opts.maxFps && !this.brain.quick && !scrolling ? 1 / this.opts.maxFps : 0;
     this.frameAcc += dt;
     if (this.frameAcc < minFrame - 0.002) return;
     this.acc += Math.min(0.25, this.frameAcc);
@@ -473,7 +484,7 @@ export class PetEngine {
     let n = 0;
     while (this.acc >= TICK && n < 15) { this.step(); this.acc -= TICK; n++; }
     if (n === 15) this.acc = 0;
-    if (n) this.render();
+    if (n || this.scrollDirty) this.render();
   };
 
   private step() {
@@ -542,6 +553,7 @@ export class PetEngine {
   private render() {
     const g = this.ctx2d;
     this.frame++;
+    this.scrollDirty = false;
     g.clearRect(0, 0, this.canvas.width, this.canvas.height);
     const pal = this.pal;
     const res = this.res;
